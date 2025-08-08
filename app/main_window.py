@@ -4,6 +4,7 @@ from collections import deque
 
 from PyQt5.QtWidgets import QMainWindow, QMessageBox, QDialog, QFileDialog
 from PyQt5.QtCore import Qt, QTimer
+from datetime import datetime
 
 from app.ui.main_ui import setup_ui
 from app.ui.dialogs.settings_dialog import SettingsDialog
@@ -92,6 +93,15 @@ class MainWindow(QMainWindow):
         self.settings_btn.clicked.connect(self.open_settings)
         self.apply_settings_btn.clicked.connect(self._apply_settings)
 
+    def _log_message(self, message, direction="RX"):
+        """Appends a message to the command log with a timestamp."""
+        timestamp = datetime.now().strftime("%H:%M:%S.%f")[:-3]
+        prefix = ">>" if direction == "TX" else "<<"
+        
+        log_entry = f"[{timestamp}] {prefix} {message}"
+        self.command_log.append(log_entry)
+        self.command_log.verticalScrollBar().setValue(self.command_log.verticalScrollBar().maximum())
+
     # --- State Management ---
     def _lock_ui(self, message="Busy..."):
         self.is_busy = True
@@ -121,6 +131,7 @@ class MainWindow(QMainWindow):
 
     # --- Serial Callbacks ---
     def _on_serial_data(self, line: str):
+        self._log_message(line, "RX") # log incoming data
         if line == "HOMED" or line.startswith("MOVED"):
             self._unlock_ui("Task complete.")
         if line == "CALIBRATE":

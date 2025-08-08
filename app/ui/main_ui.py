@@ -6,7 +6,8 @@ from PyQt5.QtGui     import QFontMetrics, QPixmap
 from PyQt5.QtWidgets import (
     QWidget, QGroupBox, QVBoxLayout, QHBoxLayout, QFormLayout,
     QLabel, QComboBox, QLineEdit, QDoubleSpinBox, QSpinBox,
-    QPushButton, QSizePolicy, QGridLayout, QTabWidget, QProgressBar
+    QPushButton, QSizePolicy, QGridLayout, QTabWidget, QProgressBar,
+    QTextEdit
 )
 
 def setup_ui(window):
@@ -178,6 +179,14 @@ def setup_ui(window):
     cmd_layout.addRow(window.cancel_cmd_btn)
     cmd_layout.addRow(window.zero_cmd_btn)
 
+    # Command Log Group
+    log_group = QGroupBox("Command Log")
+    log_layout = QVBoxLayout(log_group)
+    window.command_log = QTextEdit()
+    window.command_log.setReadOnly(True)
+    window.command_log.setStyleSheet("QTextEdit { background-color: #222; color #eee; font-family: Consolas, monospace;}")
+    log_layout.addWidget(window.command_log)
+
     # — Tabs assembly —
     tabs = QTabWidget()
     # Calibration tab
@@ -185,6 +194,7 @@ def setup_ui(window):
     cal_layout = QVBoxLayout(cal_tab)
     cal_layout.addWidget(window.logo_label, alignment=Qt.AlignLeft)
     cal_layout.addWidget(comms)
+    cal_layout.addWidget(log_group)
     cal_layout.addWidget(fluid)
     cal_layout.addWidget(command)
     bottom = QHBoxLayout()
