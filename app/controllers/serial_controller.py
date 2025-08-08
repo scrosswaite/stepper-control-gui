@@ -3,10 +3,11 @@ import serial.tools.list_ports
 from PyQt5.QtCore import QObject, QTimer
 
 class SerialController(QObject):
-    def __init__(self, on_data, on_error):
+    def __init__(self, on_data, on_error, on_disconnect):
         super().__init__()
         self.on_data = on_data
         self.on_error = on_error
+        self.on_disconnect = on_disconnect
         self._serial = None
         self._timer  = QTimer(self)
         self._timer.setInterval(100)
@@ -33,6 +34,7 @@ class SerialController(QObject):
         if self._serial:
             self._serial.close()
             self._serial = None
+        self.on_disconnect()
 
     def send(self, cmd: str):
         if self.is_connected:
