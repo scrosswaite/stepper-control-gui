@@ -123,7 +123,8 @@ class MainWindow(QMainWindow):
     def _on_serial_data(self, line: str):
         if line == "HOMED" or line.startswith("MOVED"):
             self._unlock_ui("Task complete.")
-        
+        if line == "CALIBRATE":
+            self._start_calibration_dialog()
         if line.startswith("TILT"):
             data = line[4:].strip().split()
             if len(data) >= 2:
