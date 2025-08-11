@@ -120,6 +120,15 @@ def setup_ui(window):
     f_lay.addRow("Distance from Zero (mm):", window.distance_label)
     f_lay.addRow("Bob Depth (mm):",          window.depth_label)
 
+    # Motor visual indicator
+    #f_lay.addRow(QLabel("Motor Position:"))
+    #window.position_bar = QProgressBar()
+    #window.position_bar.setTextVisible(True)
+    #window.position_bar.setFormat("%v steps")
+    #f_lay.addRow(window.position_bar)
+
+
+
     # — Controls Group —
     ctrl = QGroupBox("Controls")
     ctrl_layout = QVBoxLayout(ctrl)

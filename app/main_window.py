@@ -23,6 +23,9 @@ class MainWindow(QMainWindow):
         self.is_busy = False
         self._load_settings()
 
+        # This defines the motor's travel limit for the progress bar.
+        #self.MAX_STEPS = 5000
+
         self._tilt_buffer_len = 50
         self._tilt_buffer_x = deque(maxlen=self._tilt_buffer_len)
         self._tilt_buffer_y = deque(maxlen=self._tilt_buffer_len)
@@ -107,16 +110,25 @@ class MainWindow(QMainWindow):
         if line == "CALIBRATE":
             self._start_calibration_dialog()
         if line.startswith("TILT"):
-            data = line[4:].strip().split()
-            if len(data) >= 2:
+            data = line[4:].strip().split()  # Split the line into parts
+            if len(data) >= 2: # Check for new format: TILT pitch roll position
                 try:
-                    pitch, roll = float(data[0]), float(data[1])
+                    pitch = float(data[1])
+                    roll = float(data[2])
+                    position = int(data[3]) # Get the new position value
+
+                    # Update position bar
+                    #self.position_bar.setValue(position)
+
+                    # Update tilt buffers and labels (as before)
                     self._tilt_buffer_x.append(pitch)
                     self._tilt_buffer_y.append(roll)
                     avg_p = sum(self._tilt_buffer_x) / len(self._tilt_buffer_x)
                     avg_r = sum(self._tilt_buffer_y) / len(self._tilt_buffer_y)
                     self.tilt_x_label.setText(f"{avg_p:.2f}")
                     self.tilt_y_label.setText(f"{avg_r:.2f}")
+
+                    # Update plotting data (as before)
                     t = time.time() - self._plot_start
                     self._times.append(t)
                     self._tilt_xs.append(avg_p)
@@ -125,8 +137,8 @@ class MainWindow(QMainWindow):
                     self._all_tilt_xs.append(avg_p)
                     self._all_tilt_ys.append(avg_r)
                     self._refresh_tilt_plot()
-                except ValueError:
-                    pass
+                except (ValueError, IndexError):
+                    pass # Ignore corrupted lines
         elif line.startswith("LIMIT"):
             QMessageBox.warning(self, "Limit Switch Hit", "A limit switch was activated!")
             self._unlock_ui("Limit reached — stopped")
@@ -264,6 +276,9 @@ class MainWindow(QMainWindow):
                 self._set_status(f"Connected to {port}")
                 self.led_power.on()
                 self._set_arduino_indicator(True)
+            
+                #self.position_bar.setRange(0, self.MAX_STEPS)
+
             except Exception as e:
                 QMessageBox.critical(self, "Connection Failed", str(e))
                 self._set_status(f"Error: {e}")
@@ -307,8 +322,7 @@ class MainWindow(QMainWindow):
             QMessageBox.critical(self, "Export Failed", f"Could not write file:\n{e}")
     
     def _send_manual_command(self):
-        """Sends a command from the manual input box."""
-        if not self._check_connection() or  self.is_busy:
+        if not self._check_connection() or self.is_busy:
             return
         
         command_text = self.manual_cmd_input.text().strip()
@@ -316,7 +330,6 @@ class MainWindow(QMainWindow):
             self._set_status("Manual command is empty.")
             return
         
-        #UI is not lockde as assuming user knows what they are doing
         self._log_message(command_text, "TX")
         self.serial.send(f"{command_text}\n".encode())
-        self.manual_cmd_input.clear() # Clear the input box after sending
+        self.manual_cmd_input.clear()

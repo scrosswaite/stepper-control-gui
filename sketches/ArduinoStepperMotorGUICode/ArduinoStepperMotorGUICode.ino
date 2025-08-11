@@ -172,9 +172,12 @@ void loop() {
         lastTiltTime = now;
         float pitch, roll;
         computePitchRoll(pitch, roll);
+        
         Serial.print("TILT ");
         Serial.print(pitch, 2);
         Serial.print(" ");
-        Serial.println(roll, 2);
+        Serial.print(roll, 2);
+        //Serial.print(" "); // Add a space for the position
+        //Serial.println(currentPosition); // Send the current step position
     }
 }
