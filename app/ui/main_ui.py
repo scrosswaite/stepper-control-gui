@@ -184,7 +184,7 @@ def setup_ui(window):
     log_layout = QVBoxLayout(log_group)
     window.command_log = QTextEdit()
     window.command_log.setReadOnly(True)
-    window.command_log.setStyleSheet("QTextEdit { background-color: #222; color #eee; font-family: Consolas, monospace;}")
+    #window.command_log.setStyleSheet("QTextEdit { background-color: #222; color #eee; font-family: Consolas, monospace;}")
     log_layout.addWidget(window.command_log)
 
     # — Tabs assembly —

@@ -36,9 +36,10 @@ class SerialController(QObject):
             self._serial = None
         self.on_disconnect()
 
-    def send(self, cmd: str):
+    def send(self, data: bytes):
+        """Sends a byte string to the serial port."""
         if self.is_connected:
-            self._serial.write(cmd.encode())
+            self._serial.write(data)
 
     def _read_loop(self):
         try:
