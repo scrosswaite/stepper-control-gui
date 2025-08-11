@@ -163,6 +163,7 @@ def setup_ui(window):
         row2.addWidget(w, 1)
     ctrl_layout.addLayout(row2)
 
+
     ctrl_layout.addWidget(window.calib_progress)
     ctrl_layout.addWidget(window.calib_countdown_label)
 
@@ -286,6 +287,33 @@ def setup_ui(window):
     specs_group = QGroupBox("Stepper Motor Specifications")
     specs_form = QFormLayout(specs_group)
     setup_layout.addWidget(specs_group)
+
+    # Preset positions 
+    preset_group = QGroupBox("Preset Positions")
+    preset_layout = QGridLayout(preset_group)
+
+    window.save_pos_1_btn = QPushButton("Save 1")
+    window.go_pos_1_btn = QPushButton("Go to 1")
+    window.preset_1_label = QLabel("Not Set")
+    preset_layout.addWidget(window.save_pos_1_btn, 0, 0)
+    preset_layout.addWidget(window.go_pos_1_btn, 0, 1)
+    preset_layout.addWidget(window.preset_1_label, 0, 2)
+
+    window.save_pos_2_btn = QPushButton("Save 2")
+    window.go_pos_2_btn = QPushButton("Go to 2")
+    window.preset_2_label = QLabel("Not Set")
+    preset_layout.addWidget(window.save_pos_2_btn, 1, 0)
+    preset_layout.addWidget(window.go_pos_2_btn, 1, 1)
+    preset_layout.addWidget(window.preset_2_label, 1, 2)
+
+    window.save_pos_3_btn = QPushButton("Save 3")
+    window.go_pos_3_btn = QPushButton("Go to 3")
+    window.preset_3_label = QLabel("Not Set")
+    preset_layout.addWidget(window.save_pos_3_btn, 2, 0)
+    preset_layout.addWidget(window.go_pos_3_btn, 2, 1)
+    preset_layout.addWidget(window.preset_3_label, 2, 2)
+
+    setup_layout.addWidget(preset_group)
 
     # Create and add spinboxes in that group
     window.lead_spin = QDoubleSpinBox()

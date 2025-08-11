@@ -24,6 +24,12 @@ class MainWindow(QMainWindow):
 
         self.config_manager = ConfigManager()
         self.is_busy = False
+
+        self._preset_positions = {"1": None, "2": None, "3": None}
+        self._current_position = 0 # To track the motor's position
+        self._waiting_for_pos_to_save = None
+
+
         self._load_settings()
 
         # This defines the motor's travel limit for the progress bar.
@@ -94,6 +100,13 @@ class MainWindow(QMainWindow):
         self.begin_lvl_btn.clicked.connect(self._send_level)
         self.settings_btn.clicked.connect(self.open_settings)
         self.apply_settings_btn.clicked.connect(self._apply_settings)
+
+        self.save_pos_1_btn.clicked.connect(lambda: self._save_preset_position("1"))
+        self.go_pos_1_btn.clicked.connect(lambda: self._go_to_preset_position("1"))
+        self.save_pos_2_btn.clicked.connect(lambda: self._save_preset_position("2"))
+        self.go_pos_2_btn.clicked.connect(lambda: self._go_to_preset_position("2"))
+        self.save_pos_3_btn.clicked.connect(lambda: self._save_preset_position("3"))
+        self.go_pos_3_btn.clicked.connect(lambda: self._go_to_preset_position("3"))
 
     def _log_message(self, message, direction="RX"):
         timestamp = datetime.now().strftime("%H:%M:%S.%f")[:-3]
@@ -407,5 +420,39 @@ class MainWindow(QMainWindow):
             self.gl_view.addItem(self.x_label)
             self.gl_view.addItem(self.y_label)
             self.gl_view.addItem(self.z_label)
+
+    def _update_preset_labels(self):
+        """Updates the text labels for the preset positions."""
+        steps_per_mm = self._steps_per_rev / self._lead_mm
+        for num, pos in self._preset_positions.items():
+            label = getattr(self, f"preset_{num}_label")
+            if pos is not None:
+                pos_mm = pos / steps_per_mm
+                label.setText(f"{pos_mm:.2f} mm")
+            else:
+                label.setText("Not Set")
+
+    def _save_preset_position(self, preset_num):
+        """Asks the Arduino for its position to save it."""
+        if not self._check_connection() or self.is_busy: return
+        self._log_message(f"Requesting position for Preset {preset_num}", "TX")
+        self._waiting_for_pos_to_save = preset_num
+        self.serial.send("GET_POS\n".encode())
+
+    def _go_to_preset_position(self, preset_num):
+        """Sends a command to move to a saved preset position."""
+        if not self._check_connection() or self.is_busy: return
+        target_pos = self._preset_positions.get(preset_num)
+        if target_pos is None:
+            self._set_status(f"Preset {preset_num} is not set.")
+            return
+
+        steps_to_move = target_pos - self._current_position
+        degs_to_move = (steps_to_move / self._steps_per_rev) * 360.0
+        
+        command = f"MOVE {degs_to_move:.2f}\n"
+        self._log_message(command.strip(), "TX")
+        self._lock_ui(f"Moving to Preset {preset_num}...")
+        self.serial.send(command.encode())
 
           

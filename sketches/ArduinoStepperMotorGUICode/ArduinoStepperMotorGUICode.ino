@@ -105,6 +105,10 @@ void handleSerialCommands() {
             digitalWrite(ENA_PIN, LOW);
             Serial.println("RESET");
         }
+        else if (cmd == "GET_POS") {
+            Serial.print("POS ");
+            Serial.println(currentPosition);
+        }
     }
 }
 
