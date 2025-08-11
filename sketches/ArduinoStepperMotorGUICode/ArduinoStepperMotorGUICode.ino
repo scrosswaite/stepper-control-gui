@@ -47,8 +47,10 @@ void doSteps(long steps, int dir) {
     digitalWrite(LED_MOVING_PIN, HIGH);
 
     for (long i = 0; i < abs(steps); ++i) {
-        if (limitReached()) {
+        if (!isMoving || limitReached()) {
+            if (limitReached()) {
             Serial.println("LIMIT"); // Send limit signal to GUI
+            }
             break;
         }
         digitalWrite(PUL_PIN, HIGH);
@@ -94,6 +96,14 @@ void handleSerialCommands() {
             doSteps(DUNK_STEPS, -1);
         } else if (cmd == "LEVEL") {
             Serial.println("LEVELING"); // Placeholder for future logic
+        } else if (cmd == "ESTOP") {
+            digitalWrite(ENA_PIN, HIGH);
+            isMoving = false;
+            Serial.println("ESTOP");
+        }
+        else if (cmd == "RESET") {
+            digitalWrite(ENA_PIN, LOW);
+            Serial.println("RESET");
         }
     }
 }
