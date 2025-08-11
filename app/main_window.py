@@ -1,5 +1,8 @@
 import time
 import csv
+import numpy as np
+import pyqtgraph.opengl as gl
+from pyqtgraph.Qt import QtCore
 from collections import deque
 from datetime import datetime
 
@@ -31,7 +34,10 @@ class MainWindow(QMainWindow):
         self._tilt_buffer_y = deque(maxlen=self._tilt_buffer_len)
 
         setup_ui(self)
+
         QTimer.singleShot(0, self._update_settings_tab_fields)
+
+        self._setup_3d_view()
 
         self._plot_start = time.time()
         self._times, self._tilt_xs, self._tilt_ys = deque(maxlen=100), deque(maxlen=100), deque(maxlen=100)
@@ -105,22 +111,29 @@ class MainWindow(QMainWindow):
 
     def _on_serial_data(self, line: str):
         self._log_message(line, "RX")
+
         if line == "HOMED" or line.startswith("MOVED"):
             self._unlock_ui("Task complete.")
+        
         if line == "CALIBRATE":
             self._start_calibration_dialog()
+
         if line.startswith("TILT"):
-            data = line[4:].strip().split()  # Split the line into parts
-            if len(data) >= 2: # Check for new format: TILT pitch roll position
+            # --- MODIFIED & FIXED SECTION ---
+            data = line[4:].strip().split()
+            # Revert to the old format check since position is no longer sent
+            if len(data) >= 2:
                 try:
-                    pitch = float(data[1])
-                    roll = float(data[2])
-                    position = int(data[3]) # Get the new position value
+                    pitch = float(data[0])
+                    roll = float(data[1])
 
-                    # Update position bar
-                    #self.position_bar.setValue(position)
-
-                    # Update tilt buffers and labels (as before)
+                    # Apply rotation to all four 3D objects (body + 3 axes)
+                    for item in [self.accel_body, self.x_axis, self.y_axis, self.z_axis]:
+                        item.resetTransform()
+                        item.rotate(pitch, 1, 0, 0) # Rotate around X-axis
+                        item.rotate(roll, 0, 1, 0)  # Rotate around Y-axis
+                    
+                    # (The rest of the tilt data processing is the same)
                     self._tilt_buffer_x.append(pitch)
                     self._tilt_buffer_y.append(roll)
                     avg_p = sum(self._tilt_buffer_x) / len(self._tilt_buffer_x)
@@ -128,7 +141,6 @@ class MainWindow(QMainWindow):
                     self.tilt_x_label.setText(f"{avg_p:.2f}")
                     self.tilt_y_label.setText(f"{avg_r:.2f}")
 
-                    # Update plotting data (as before)
                     t = time.time() - self._plot_start
                     self._times.append(t)
                     self._tilt_xs.append(avg_p)
@@ -137,8 +149,9 @@ class MainWindow(QMainWindow):
                     self._all_tilt_xs.append(avg_p)
                     self._all_tilt_ys.append(avg_r)
                     self._refresh_tilt_plot()
-                except (ValueError, IndexError):
-                    pass # Ignore corrupted lines
+
+                except ValueError:
+                    pass
         elif line.startswith("LIMIT"):
             QMessageBox.warning(self, "Limit Switch Hit", "A limit switch was activated!")
             self._unlock_ui("Limit reached — stopped")
@@ -333,3 +346,33 @@ class MainWindow(QMainWindow):
         self._log_message(command_text, "TX")
         self.serial.send(f"{command_text}\n".encode())
         self.manual_cmd_input.clear()
+
+    def _setup_3d_view(self):
+            """Creates the 3D objects for the accelerometer visualization."""
+            
+            # Create the green rectangular body of the accelerometer
+            verts = np.array([
+                [-10, -5, -1], [10, -5, -1], [10, 5, -1], [-10, 5, -1],
+                [-10, -5, 1], [10, -5, 1], [10, 5, 1], [-10, 5, 1]
+            ])
+            faces = np.array([
+                [0, 1, 2], [0, 2, 3], [4, 5, 6], [4, 6, 7], [0, 1, 5], [0, 5, 4],
+                [2, 3, 7], [2, 7, 6], [0, 3, 7], [0, 7, 4], [1, 2, 6], [1, 6, 5]
+            ])
+            colors = np.array([[0.3, 0.8, 0.3, 0.8]] * 12) # Semi-transparent green
+
+            self.accel_body = gl.GLMeshItem(
+                vertexes=verts, faces=faces, faceColors=colors,
+                smooth=False, drawEdges=True, edgeColor=(0, 0, 0, 1)
+            )
+            self.gl_view.addItem(self.accel_body)
+
+            # Create lines for the X, Y, and Z axes originating from the center
+            origin = [0, 0, 0]
+            self.x_axis = gl.GLLinePlotItem(pos=np.array([origin, [15, 0, 0]]), color=(1, 0, 0, 1), width=3) # Red X
+            self.y_axis = gl.GLLinePlotItem(pos=np.array([origin, [0, 10, 0]]), color=(0, 1, 0, 1), width=3) # Green Y
+            self.z_axis = gl.GLLinePlotItem(pos=np.array([origin, [0, 0, 10]]), color=(0, 0, 1, 1), width=3) # Blue Z
+            
+            self.gl_view.addItem(self.x_axis)
+            self.gl_view.addItem(self.y_axis)
+            self.gl_view.addItem(self.z_axis)

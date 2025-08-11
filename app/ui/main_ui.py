@@ -1,4 +1,5 @@
 import os
+import pyqtgraph.opengl as gl
 from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
 from matplotlib.figure import Figure 
 from PyQt5.QtCore    import Qt
@@ -248,6 +249,23 @@ def setup_ui(window):
     lev_layout = QVBoxLayout(lev_tab)
     lev_layout.addWidget(lev_group)
     lev_layout.addWidget(window.tilt_canvas)
+
+    # Add 3D view
+    view_group = QGroupBox("Live Platform View")
+    view_layout = QVBoxLayout(view_group)
+    window.gl_view = gl.GLViewWidget()
+    window.gl_view.setCameraPosition(distance=40)
+    view_layout.addWidget(window.gl_view, 1)
+
+    # controls
+    top_layout = QHBoxLayout()
+    top_layout.addWidget(view_group, 2)
+    top_layout.addWidget(lev_group, 1)
+
+    lev_layout.addLayout(top_layout)
+
+    lev_layout.addWidget(window.tilt_canvas)
+
     
     # Export Button
     window.export_btn = QPushButton("Export Tilt Data")
