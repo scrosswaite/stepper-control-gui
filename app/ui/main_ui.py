@@ -233,6 +233,7 @@ def setup_ui(window):
     lev_form  = QFormLayout(lev_group)
     lev_form.addRow("Tilt X (°):", window.tilt_x_label)
     lev_form.addRow("Tilt Y (°):", window.tilt_y_label)
+    lev_form.addRow("Tilt Z (°):", window.tilt_z_label) # unavaliable until 9DoF accelerometer used
     lev_form.addRow(window.begin_lvl_btn)
 
     # 2) Create the Matplotlib canvas

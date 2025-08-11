@@ -6,7 +6,7 @@ from pyqtgraph.Qt import QtCore
 from collections import deque
 from datetime import datetime
 
-from PyQt5.QtWidgets import QMainWindow, QMessageBox, QDialog, QFileDialog
+from PyQt5.QtWidgets import QMainWindow, QMessageBox, QDialog, QFileDialog, QLabel
 from PyQt5.QtCore import Qt, QTimer
 
 from app.ui.main_ui import setup_ui
@@ -32,16 +32,24 @@ class MainWindow(QMainWindow):
         self._tilt_buffer_len = 50
         self._tilt_buffer_x = deque(maxlen=self._tilt_buffer_len)
         self._tilt_buffer_y = deque(maxlen=self._tilt_buffer_len)
+        self._tilt_buffer_z = deque(maxlen=self._tilt_buffer_len)
+
+        self.tilt_z_label = QLabel("0.00")
 
         setup_ui(self)
-
+      
         QTimer.singleShot(0, self._update_settings_tab_fields)
 
         self._setup_3d_view()
 
         self._plot_start = time.time()
         self._times, self._tilt_xs, self._tilt_ys = deque(maxlen=100), deque(maxlen=100), deque(maxlen=100)
+
+        self._tilt_zs = deque(maxlen=100)
+
         self._all_times, self._all_tilt_xs, self._all_tilt_ys = [], [], []
+
+        self._all_tilt_zs = []
 
         self.export_btn.clicked.connect(self._export_tilt_data)
 
@@ -53,6 +61,7 @@ class MainWindow(QMainWindow):
         self.led_ready.off()
         self.led_moving.off()
         self.led_error._widget.setStyleSheet("background-color: red; border:1px solid black; border-radius:6px;")
+
 
         self.serial = SerialController(
             on_data=self._on_serial_data,
@@ -126,6 +135,13 @@ class MainWindow(QMainWindow):
                 try:
                     pitch = float(data[0])
                     roll = float(data[1])
+                    yaw = 0.0 #placeholder until we have better accelerometer 
+
+                    items_to_rotate = [
+                        self.accel_body, 
+                        self.x_axis, self.y_axis, self.z_axis,
+                        self.x_label, self.y_label, self.z_label
+                    ]
 
                     # Apply rotation to all four 3D objects (body + 3 axes)
                     for item in [self.accel_body, self.x_axis, self.y_axis, self.z_axis]:
@@ -136,19 +152,25 @@ class MainWindow(QMainWindow):
                     # (The rest of the tilt data processing is the same)
                     self._tilt_buffer_x.append(pitch)
                     self._tilt_buffer_y.append(roll)
+                    self._tilt_buffer_z.append(yaw)
                     avg_p = sum(self._tilt_buffer_x) / len(self._tilt_buffer_x)
                     avg_r = sum(self._tilt_buffer_y) / len(self._tilt_buffer_y)
+                    avg_y = sum(self._tilt_buffer_z) / len(self._tilt_buffer_z)
                     self.tilt_x_label.setText(f"{avg_p:.2f}")
                     self.tilt_y_label.setText(f"{avg_r:.2f}")
+                    self.tilt_z_label.setText(f"{avg_y:.2f}")
 
                     t = time.time() - self._plot_start
                     self._times.append(t)
                     self._tilt_xs.append(avg_p)
                     self._tilt_ys.append(avg_r)
+                    self._tilt_zs.append(avg_y)
                     self._all_times.append(t)
                     self._all_tilt_xs.append(avg_p)
                     self._all_tilt_ys.append(avg_r)
+                    self._all_tilt_zs.append(avg_y)
                     self._refresh_tilt_plot()
+              
 
                 except ValueError:
                     pass
@@ -300,6 +322,7 @@ class MainWindow(QMainWindow):
         self.tilt_ax.clear()
         self.tilt_ax.plot(self._times, self._tilt_xs, label="Tilt X", linewidth=2)
         self.tilt_ax.plot(self._times, self._tilt_ys, label="Tilt Y", linewidth=2)
+        self.tilt_ax.plot(self._times, self._tilt_zs, label="Tilt Z", linewidth=2)
         self.tilt_ax.grid(which="major", linestyle="--", linewidth=0.5)
         self.tilt_ax.legend(loc="upper right")
         self.tilt_ax.set_xlabel("Time (s)")
@@ -328,8 +351,8 @@ class MainWindow(QMainWindow):
             with open(path, 'w', newline='') as f:
                 writer = csv.writer(f)
                 writer.writerow(["Time (s)", "Tilt X (°)", "Tilt Y (°)"])
-                for t, x, y in zip(self._all_times, self._all_tilt_xs, self._all_tilt_ys):
-                    writer.writerow([f"{t:.3f}", f"{x:.3f}", f"{y:.3f}"])
+                for t, x, y, z in zip(self._all_times, self._all_tilt_xs, self._all_tilt_ys, self._all_tilt_zs):
+                    writer.writerow([f"{t:.3f}", f"{x:.3f}", f"{y:.3f}", f"{z:.3f}"])
             QMessageBox.information(self, "Export Successful", f"Data exported to:\n{path}")
         except Exception as e:
             QMessageBox.critical(self, "Export Failed", f"Could not write file:\n{e}")
@@ -376,3 +399,13 @@ class MainWindow(QMainWindow):
             self.gl_view.addItem(self.x_axis)
             self.gl_view.addItem(self.y_axis)
             self.gl_view.addItem(self.z_axis)
+
+            self.x_label = gl.GLTextItem(pos=[17, 0, 0], text='X')
+            self.y_label = gl.GLTextItem(pos=[0, 12, 0], text='Y')
+            self.z_label = gl.GLTextItem(pos=[0, 0, 12], text='Z')
+
+            self.gl_view.addItem(self.x_label)
+            self.gl_view.addItem(self.y_label)
+            self.gl_view.addItem(self.z_label)
+
+          
