@@ -305,4 +305,18 @@ class MainWindow(QMainWindow):
             QMessageBox.information(self, "Export Successful", f"Data exported to:\n{path}")
         except Exception as e:
             QMessageBox.critical(self, "Export Failed", f"Could not write file:\n{e}")
-            #test change
+    
+    def _send_manual_command(self):
+        """Sends a command from the manual input box."""
+        if not self._check_connection() or  self.is_busy:
+            return
+        
+        command_text = self.manual_cmd_input.text().strip()
+        if not command_text:
+            self._set_status("Manual command is empty.")
+            return
+        
+        #UI is not lockde as assuming user knows what they are doing
+        self._log_message(command_text, "TX")
+        self.serial.send(f"{command_text}\n".encode())
+        self.manual_cmd_input.clear() # Clear the input box after sending

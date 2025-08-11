@@ -179,6 +179,14 @@ def setup_ui(window):
     cmd_layout.addRow(window.cancel_cmd_btn)
     cmd_layout.addRow(window.zero_cmd_btn)
 
+    # Manual command input
+    cmd_layout.addRow(QLabel("-----------"))
+    window.manual_cmd_input = QLineEdit()
+    window.manual_cmd_input.setPlaceholderText("e.g., MOVE -90")
+    cmd_layout.addRow("Manual Cmd:", window.manual_cmd_input)
+    window.manual_cmd_send_btn = QPushButton("Send Manual Command")
+    cmd_layout.addRow(window.manual_cmd_send_btn)
+
     # Command Log Group
     log_group = QGroupBox("Command Log")
     log_layout = QVBoxLayout(log_group)
