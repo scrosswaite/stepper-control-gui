@@ -6,25 +6,21 @@
 
 // --- Motion Parameters ---
 const int STEPS_PER_REV = 200;
-const int STEPS_PER_MM  = STEPS_PER_REV / 12;   //  12mm lead screw
-const int JOG_STEPS     = STEPS_PER_MM / 2;    // 0.5mm jog
-const long DUNK_STEPS   = 50L * STEPS_PER_MM;  // 50mm dunk
+const int STEPS_PER_MM  = STEPS_PER_REV / 12;   // 12mm lead screw
+const int JOG_STEPS     = STEPS_PER_MM / 2;     // 0.5mm jog
+const long DUNK_STEPS   = 50L * STEPS_PER_MM;   // 50mm dunk
 
 // --- Pin Assignments ---
-// L298N IN pins (motor coils)
 const int IN1_PIN = 8;
 const int IN2_PIN = 9;
 const int IN3_PIN = 10;
 const int IN4_PIN = 11;
 
-// Limit switches (active LOW with pullups)
 const int LIMIT1_PIN = 2;
 const int LIMIT2_PIN = 3;
 
-// Status LED
 const int LED_MOVING_PIN = A3;
 
-// Buttons (moved to avoid conflict with IN1–IN4)
 const int BTN_FWD_PIN   = 4;
 const int BTN_REV_PIN   = 5;
 const int BTN_HOME_PIN  = 6;
@@ -36,10 +32,33 @@ long currentPosition = 0;
 bool isMoving = false;
 unsigned long lastTiltTime = 0;
 volatile bool cancelRequested = false;
+bool holdTorque = false;   // NEW: default to coils off at rest
+
+// Read any pending serial and set cancel flag while moving
+inline void pollCancelFromSerial() {
+  if (Serial.available()) {
+    // very short timeout so this doesn't block stepping
+    unsigned long prev = Serial.getTimeout();
+    Serial.setTimeout(1);
+    String cmd = Serial.readStringUntil('\n');
+    Serial.setTimeout(prev);
+
+    cmd.trim();
+    if (cmd.length()) {
+      if (cmd == "STOP" || cmd == "CANCEL") {
+        cancelRequested = true;
+        Serial.println("STOPPING");   // GUI can unlock on this
+      } else if (cmd == "ESTOP") {
+        cancelRequested = true;
+        Serial.println("ESTOP");      // GUI can unlock on this
+      }
+    }
+  }
+}
 
 // --- Objects ---
 MPU6050 mpu;
-Stepper myStepper(STEPS_PER_REV, IN1_PIN, IN3_PIN, IN2_PIN, IN4_PIN); // (pin order for L298N)
+Stepper myStepper(STEPS_PER_REV, IN1_PIN, IN2_PIN, IN3_PIN, IN4_PIN);
 
 ezButton buttonFwd(BTN_FWD_PIN);
 ezButton buttonRev(BTN_REV_PIN);
@@ -52,11 +71,19 @@ bool limitReached() {
   return (digitalRead(LIMIT1_PIN) == LOW || digitalRead(LIMIT2_PIN) == LOW);
 }
 
+// NEW: fully de-energise coils
+inline void coilsOff() {
+  digitalWrite(IN1_PIN, LOW);
+  digitalWrite(IN2_PIN, LOW);
+  digitalWrite(IN3_PIN, LOW);
+  digitalWrite(IN4_PIN, LOW);
+}
+
 // Interruptible step loop with limit & cancel checks
 void moveMotor(long steps) {
   if (isMoving) return;
 
-  // Pre-check: don't start if already against limit in that direction
+  // Pre-check
   if ((steps > 0 && digitalRead(LIMIT1_PIN) == LOW) ||
       (steps < 0 && digitalRead(LIMIT2_PIN) == LOW)) {
     Serial.println("LIMIT");
@@ -71,6 +98,9 @@ void moveMotor(long steps) {
   long moved = 0;
 
   while (remaining > 0) {
+
+    pollCancelFromSerial();
+
     if (cancelRequested) {
       cancelRequested = false;
       Serial.println("STOPPED");
@@ -82,7 +112,7 @@ void moveMotor(long steps) {
       break;
     }
 
-    myStepper.step(dir);   // one step in chosen direction (blocking for this single step)
+    myStepper.step(dir);
     currentPosition += dir;
     moved += dir;
     remaining--;
@@ -91,11 +121,15 @@ void moveMotor(long steps) {
   digitalWrite(LED_MOVING_PIN, LOW);
   isMoving = false;
 
+  // NEW: cut idle current unless holding torque requested
+  if (!holdTorque) {
+    coilsOff();
+  }
+
   // Always report position after a motion attempt
   Serial.print("POS ");
   Serial.println(currentPosition);
 
-  // If we completed the requested motion fully, report MOVED <deg>
   if (remaining == 0) {
     float degMoved = (float)moved / STEPS_PER_REV * 360.0f;
     Serial.print("MOVED ");
@@ -124,7 +158,7 @@ void handleSerialCommands() {
       moveMotor(steps);
     }
     else if (cmd == "HOME") {
-      moveMotor(-currentPosition); // move back to zero
+      moveMotor(-currentPosition);
       currentPosition = 0;
       Serial.println("HOMED");
       Serial.print("POS ");
@@ -140,10 +174,30 @@ void handleSerialCommands() {
     else if (cmd == "STOP" || cmd == "CANCEL") {
       cancelRequested = true;
       Serial.println("STOPPING");
+      if (!isMoving && !holdTorque) coilsOff();  
     }
     else if (cmd == "ESTOP") {
       cancelRequested = true;
       Serial.println("ESTOP");
+      if (!isMoving && !holdTorque) coilsOff();   
+    }
+    else if (cmd == "HOLD ON") {                 
+      holdTorque = true;
+      Serial.println("HOLD ON");
+    }
+    else if (cmd == "HOLD OFF") {                  
+      holdTorque = false;
+      coilsOff();
+      Serial.println("HOLD OFF");
+    } 
+    else if (cmd == "SET_ZERO") {
+      currentPosition = 0;
+      Serial.println("HOMED");
+      Serial.print("POS ");
+      Serial.println(currentPosition);
+      if (!isMoving && !holdTorque) {
+        coilsOff();
+      }
     }
   }
 }
@@ -164,7 +218,6 @@ void handleButtons() {
   if (buttonCalib.isPressed()){ Serial.println("CALIBRATE"); }
 }
 
-// --- Setup & Loop ---
 void setup() {
   Serial.begin(9600);
   Serial.setTimeout(50);
@@ -193,6 +246,9 @@ void setup() {
   buttonHome.setDebounceTime(50);
   buttonDunk.setDebounceTime(50);
   buttonCalib.setDebounceTime(50);
+
+  // NEW: start de-energised
+  coilsOff();
 }
 
 void loop() {
@@ -209,6 +265,5 @@ void loop() {
     Serial.print(pitch, 2);
     Serial.print(" ");
     Serial.println(roll, 2);
-    // (position omitted from TILT to match GUI parser)
   }
 }

@@ -1,5 +1,11 @@
 {
     "lead_mm": 12.0,
     "steps_per_rev": 200,
-    "click_mm": 0.5
+    "click_mm": 0.5,
+    "comp_factor": 32.0855614973262,
+    "presets": {
+        "1": -10645,
+        "2": -10773,
+        "3": null
+    }
 }

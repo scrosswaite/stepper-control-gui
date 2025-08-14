@@ -1,2 +1,1 @@
-
-    window.show()
+from app.main_window import MainWindow

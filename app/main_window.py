@@ -7,7 +7,7 @@ from collections import deque
 from datetime import datetime
 
 from PyQt5.QtWidgets import QMainWindow, QMessageBox, QDialog, QFileDialog, QLabel
-from PyQt5.QtCore import Qt, QTimer
+from PyQt5.QtCore import Qt
 
 from app.ui.main_ui import setup_ui
 from app.ui.dialogs.settings_dialog import SettingsDialog
@@ -17,53 +17,65 @@ from app.controllers.calibration_manager import CalibrationManager
 from app.utils.led_indicator import LedIndicator
 from app.utils.config_manager import ConfigManager
 
+
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("Stepper Control GUI")
 
+        # -------------------------------
+        # Core state & safe defaults (so setup_ui can read them)
+        # -------------------------------
         self.config_manager = ConfigManager()
         self.is_busy = False
 
+        # Motion / config defaults (overridden by _load_settings)
+        self._lead_mm = 4.0
+        self._steps_per_rev = 200
+        self._click_mm = 0.5
+        self._click_deg = (self._click_mm / self._lead_mm) * 360.0
+        self._comp_factor = 300 / 9.35  # keep existing factor
+        self.tilt_x_label = QLabel("0.00")
+        self.tilt_y_label = QLabel("0.00")
+        self.tilt_z_label = QLabel("0.00")
+
+        # Position & presets
         self._preset_positions = {"1": None, "2": None, "3": None}
-        self._current_position = 0 # To track the motor's position
+        self._current_position = 0
         self._waiting_for_pos_to_save = None
 
-
-        self._load_settings()
-
-        # This defines the motor's travel limit for the progress bar.
-        #self.MAX_STEPS = 5000
-
+        # Tilt buffers (logic-only; UI comes later)
         self._tilt_buffer_len = 50
         self._tilt_buffer_x = deque(maxlen=self._tilt_buffer_len)
         self._tilt_buffer_y = deque(maxlen=self._tilt_buffer_len)
         self._tilt_buffer_z = deque(maxlen=self._tilt_buffer_len)
 
-        self.tilt_z_label = QLabel("0.00")
-
-        setup_ui(self)
-      
-        QTimer.singleShot(0, self._update_settings_tab_fields)
-
-        self._setup_3d_view()
-
+        # Plotting buffers
         self._plot_start = time.time()
         self._times, self._tilt_xs, self._tilt_ys = deque(maxlen=100), deque(maxlen=100), deque(maxlen=100)
-
         self._tilt_zs = deque(maxlen=100)
+        self._all_times, self._all_tilt_xs, self._all_tilt_ys, self._all_tilt_zs = [], [], [], []
 
-        self._all_times, self._all_tilt_xs, self._all_tilt_ys = [], [], []
+        # -------------------------------
+        # Load persisted settings (NO UI calls here)
+        # -------------------------------
+        self._load_settings()
 
-        self._all_tilt_zs = []
+        # -------------------------------
+        # Build UI (can safely read _lead_mm/_steps_per_rev/_click_mm)
+        # -------------------------------
+        setup_ui(self)
 
-        self.export_btn.clicked.connect(self._export_tilt_data)
-        self.manual_cmd_send_btn.clicked.connect(self._send_manual_command)
-        self.cmd_send_btn.clicked.connect(self._send_command_from_fields)
-        self.cancel_cmd_btn.clicked.connect(self._cancel_command)   # or another cancel handler if you have one
-        self.zero_cmd_btn.clicked.connect(self._send_zero)
+        # 3D view depends on UI widgets created above
+        self._setup_3d_view()
 
+        # Now it's safe to touch widgets
+        self._update_settings_tab_fields()
+        self._update_preset_labels()
 
+        # -------------------------------
+        # LEDs
+        # -------------------------------
         self.led_power  = LedIndicator(self.led_power)
         self.led_ready  = LedIndicator(self.led_ready)
         self.led_moving = LedIndicator(self.led_moving)
@@ -71,9 +83,12 @@ class MainWindow(QMainWindow):
         self.led_power.on()
         self.led_ready.off()
         self.led_moving.off()
+        # Keep error LED red by default
         self.led_error._widget.setStyleSheet("background-color: red; border:1px solid black; border-radius:6px;")
 
-
+        # -------------------------------
+        # Serial & calibration
+        # -------------------------------
         self.serial = SerialController(
             on_data=self._on_serial_data,
             on_error=self._on_serial_error,
@@ -92,6 +107,16 @@ class MainWindow(QMainWindow):
             lead_mm=self._lead_mm,
             click_mm=self._click_mm
         )
+
+        # -------------------------------
+        # Signals
+        # -------------------------------
+        self.export_btn.clicked.connect(self._export_tilt_data)
+        self.manual_cmd_send_btn.clicked.connect(self._send_manual_command)
+        self.cmd_send_btn.clicked.connect(self._send_command_from_fields)
+        self.cancel_cmd_btn.clicked.connect(self._cancel_command)
+        self.zero_cmd_btn.clicked.connect(self._set_zero_here)
+
 
         self.refresh_btn.clicked.connect(self.update_ports)
         self.connect_btn.clicked.connect(self._toggle_connection)
@@ -113,6 +138,9 @@ class MainWindow(QMainWindow):
         self.save_pos_3_btn.clicked.connect(lambda: self._save_preset_position("3"))
         self.go_pos_3_btn.clicked.connect(lambda: self._go_to_preset_position("3"))
 
+    # --------------------------------------------------------------------
+    # Helpers / UI state
+    # --------------------------------------------------------------------
     def _log_message(self, message, direction="RX"):
         timestamp = datetime.now().strftime("%H:%M:%S.%f")[:-3]
         prefix = ">>" if direction == "TX" else "<<"
@@ -125,7 +153,8 @@ class MainWindow(QMainWindow):
         self._set_status(message)
         self.led_moving.on()
         self.led_ready.off()
-        for btn in (self.dunk_btn, self.zero_btn, self.calib_btn, self.up_btn, self.down_btn, self.connect_btn, self.begin_lvl_btn, self.settings_btn, self.apply_settings_btn):
+        for btn in (self.dunk_btn, self.zero_btn, self.calib_btn, self.up_btn, self.down_btn,
+                    self.connect_btn, self.begin_lvl_btn, self.settings_btn, self.apply_settings_btn):
             btn.setEnabled(False)
 
     def _unlock_ui(self, message="Ready"):
@@ -133,20 +162,56 @@ class MainWindow(QMainWindow):
         self._set_status(message)
         self.led_moving.off()
         self.led_ready.on()
-        for btn in (self.dunk_btn, self.zero_btn, self.calib_btn, self.up_btn, self.down_btn, self.connect_btn, self.begin_lvl_btn, self.settings_btn, self.apply_settings_btn):
+        for btn in (self.dunk_btn, self.zero_btn, self.calib_btn, self.up_btn, self.down_btn,
+                    self.connect_btn, self.begin_lvl_btn, self.settings_btn, self.apply_settings_btn):
             btn.setEnabled(True)
 
+    # --------------------------------------------------------------------
+    # Serial data handling
+    # --------------------------------------------------------------------
     def _on_serial_data(self, line: str):
         self._log_message(line, "RX")
         line = line.strip()
 
-        if line == "HOMED" or line.startswith("MOVED"):
-            self._unlock_ui("Task complete.")
+        if line == "HOMED":
+            self._current_position = 0
+            self._update_preset_labels()  # UI exists now, safe
+            self._unlock_ui("Homed.")
+            return
 
-        elif line == "CALIBRATE":
+        if line.startswith("POS"):
+            parts = line.split()
+            if len(parts) >= 2:
+                try:
+                    steps = int(float(parts[1]))  # tolerate "123.0"
+                    self._current_position = steps
+
+                    # If we were saving a preset, store it now
+                    if self._waiting_for_pos_to_save is not None:
+                        slot = self._waiting_for_pos_to_save
+                        self._preset_positions[slot] = steps
+                        self._waiting_for_pos_to_save = None
+                        self._update_preset_labels()
+                        self._save_settings()
+                        self._set_status(f"Preset {slot} saved.")
+                except ValueError:
+                    pass
+            return
+
+        # Completed move (do not adjust position here; rely on POS)
+        if line.startswith("MOVED"):
+            self._unlock_ui("Move complete.")
+            return
+
+        if line in ("STOPPING", "STOPPED" "ESTOP"):
+            self._unlock_ui("Motion stopped.")
+            return
+
+        if line == "CALIBRATE":
             self._start_calibration_dialog()
+            return
 
-        elif line.startswith("TILT"):
+        if line.startswith("TILT"):
             data = line[4:].strip().split()
             if len(data) >= 2:
                 try:
@@ -182,19 +247,19 @@ class MainWindow(QMainWindow):
                     self._all_tilt_ys.append(avg_r)
                     self._all_tilt_zs.append(avg_y)
                     self._refresh_tilt_plot()
-
                 except ValueError:
                     pass
+            return
 
-        elif line.startswith("LIMIT"):
+        if line.startswith("LIMIT"):
             QMessageBox.warning(self, "Limit Switch Hit", "A limit switch was activated!")
             self._unlock_ui("Limit reached — stopped")
             self.led_error.on()
+            return
 
-        elif any(line.upper().startswith(s) for s in ("CANCEL", "STOP", "ABORT")):
+        if any(line.upper().startswith(s) for s in ("CANCEL", "STOP", "ABORT")):
             self._unlock_ui("Command cancelled.")
-
-
+            return
 
     def _on_serial_error(self, err: Exception):
         self._set_status(f"Serial error: {err}")
@@ -206,8 +271,12 @@ class MainWindow(QMainWindow):
         self._set_arduino_indicator(False)
         self._unlock_ui("Disconnected")
 
+    # --------------------------------------------------------------------
+    # Calibration
+    # --------------------------------------------------------------------
     def _start_calibration_dialog(self):
-        if not self._check_connection() or self.is_busy: return
+        if not self._check_connection() or self.is_busy:
+            return
         dlg = CalibrationSettingsDialog(self)
         if dlg.exec_() == QDialog.Accepted:
             self.calibration._interval_ms = dlg.get_interval_ms()
@@ -217,64 +286,89 @@ class MainWindow(QMainWindow):
             self._lock_ui("Starting calibration...")
             self.calibration.start()
 
+    # --------------------------------------------------------------------
+    # Commands
+    # --------------------------------------------------------------------
     def _send_up(self):
-        if not self._check_connection() or self.is_busy: return
+        if not self._check_connection() or self.is_busy:
+            return
         self._lock_ui("Moving up...")
         command = f"MOVE {self._click_deg}\n"
         self._log_message(command.strip(), "TX")
         self.serial.send(command.encode())
 
     def _send_down(self):
-        if not self._check_connection() or self.is_busy: return
+        if not self._check_connection() or self.is_busy:
+            return
         self._lock_ui("Moving down...")
         command = f"MOVE {-self._click_deg}\n"
         self._log_message(command.strip(), "TX")
         self.serial.send(command.encode())
 
     def _send_zero(self):
-        if not self._check_connection() or self.is_busy: return
+        if not self._check_connection() or self.is_busy:
+            return
         self._lock_ui("Homing...")
         command = "HOME\n"
         self._log_message(command.strip(), "TX")
         self.serial.send(command.encode())
 
     def _send_dunk(self):
-        if not self._check_connection() or self.is_busy: return
+        if not self._check_connection() or self.is_busy:
+            return
         self._lock_ui("Dunking...")
         command = "DUNK\n"
         self._log_message(command.strip(), "TX")
         self.serial.send(command.encode())
 
     def _send_level(self):
-        if not self._check_connection() or self.is_busy: return
+        if not self._check_connection() or self.is_busy:
+            return
         self._lock_ui("Starting levelling...")
         command = "LEVEL\n"
         self._log_message(command.strip(), "TX")
         self.serial.send(command.encode())
 
     def _send_estop(self):
-        if not self._check_connection(): return
+        if not self._check_connection():
+            return
         self._lock_ui("Sending E-Stop...")
         command = "ESTOP\n"
         self._log_message(command.strip(), "TX")
         self.serial.send(command.encode())
         self._unlock_ui("E-STOP Sent.")
 
+    # --------------------------------------------------------------------
+    # Settings & persistence
+    # --------------------------------------------------------------------
     def _load_settings(self):
+        """Load config values only. DO NOT touch UI here."""
         settings = self.config_manager.load_settings()
-        self._lead_mm = float(settings.get("lead_mm", 4.0))
-        self._steps_per_rev = int(settings.get("steps_per_rev", 200))
-        self._click_mm = float(settings.get("click_mm", 0.5))
+        self._lead_mm = float(settings.get("lead_mm", self._lead_mm))
+        self._steps_per_rev = int(settings.get("steps_per_rev", self._steps_per_rev))
+        self._click_mm = float(settings.get("click_mm", self._click_mm))
         self._click_deg = (self._click_mm / self._lead_mm) * 360.0
-        self._comp_factor = 300 / 9.35
+        self._comp_factor = settings.get("comp_factor", self._comp_factor)
+
+        presets = settings.get("presets", {})
+        for k in ("1", "2", "3"):
+            v = presets.get(k, None)
+            self._preset_positions[k] = int(v) if isinstance(v, (int, float)) else None
 
     def _update_settings_tab_fields(self):
+        # Safe: widgets exist after setup_ui
         self.lead_spin.setValue(self._lead_mm)
         self.steps_spin.setValue(self._steps_per_rev)
         self.click_spin.setValue(self._click_mm)
 
     def _save_settings(self):
-        settings_to_save = {"lead_mm": self._lead_mm, "steps_per_rev": self._steps_per_rev, "click_mm": self._click_mm}
+        settings_to_save = {
+            "lead_mm": self._lead_mm,
+            "steps_per_rev": self._steps_per_rev,
+            "click_mm": self._click_mm,
+            "comp_factor": self._comp_factor,
+            "presets": self._preset_positions
+        }
         self.config_manager.save_settings(settings_to_save)
 
     def _apply_settings(self):
@@ -284,6 +378,7 @@ class MainWindow(QMainWindow):
         self._click_deg = (self._click_mm / self._lead_mm) * 360.0
         self._set_status("Settings applied and saved.")
         self._save_settings()
+        self._update_preset_labels()
 
     def open_settings(self):
         dlg = SettingsDialog(self)
@@ -295,15 +390,22 @@ class MainWindow(QMainWindow):
             self._update_settings_tab_fields()
             self._set_status("Settings updated.")
             self._save_settings()
+            self._update_preset_labels()
 
     def closeEvent(self, event):
-        reply = QMessageBox.question(self, "Confirm Exit", "Are you sure you want to quit?", QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
+        reply = QMessageBox.question(self, "Confirm Exit",
+                                     "Are you sure you want to quit?",
+                                     QMessageBox.Yes | QMessageBox.No,
+                                     QMessageBox.No)
         if reply == QMessageBox.Yes:
             self._save_settings()
             event.accept()
         else:
             event.ignore()
 
+    # --------------------------------------------------------------------
+    # Connection
+    # --------------------------------------------------------------------
     def update_ports(self):
         self.port_combo.clear()
         self.port_combo.addItems(self.serial.list_ports())
@@ -328,13 +430,19 @@ class MainWindow(QMainWindow):
                 self._set_status(f"Connected to {port}")
                 self.led_power.on()
                 self._set_arduino_indicator(True)
-            
-                #self.position_bar.setRange(0, self.MAX_STEPS)
 
+                # Optional: sync position immediately
+                self._log_message("GET_POS", "TX")
+                self.serial.send(b"GET_POS\n")
+
+                # self.position_bar.setRange(0, self.MAX_STEPS)
             except Exception as e:
                 QMessageBox.critical(self, "Connection Failed", str(e))
                 self._set_status(f"Error: {e}")
 
+    # --------------------------------------------------------------------
+    # Plotting
+    # --------------------------------------------------------------------
     def _refresh_tilt_plot(self):
         self.tilt_ax.clear()
         self.tilt_ax.plot(self._times, self._tilt_xs, label="Tilt X", linewidth=2)
@@ -348,6 +456,9 @@ class MainWindow(QMainWindow):
         self.tilt_fig.tight_layout()
         self.tilt_canvas.draw()
 
+    # --------------------------------------------------------------------
+    # Status & indicators
+    # --------------------------------------------------------------------
     def _set_status(self, text: str):
         self.status.setText(text)
 
@@ -361,9 +472,13 @@ class MainWindow(QMainWindow):
         color = "green" if connected else "red"
         self.arduino_indicator.setStyleSheet(f"background-color: {color}; border: 1px solid black;")
 
+    # --------------------------------------------------------------------
+    # Export & manual command
+    # --------------------------------------------------------------------
     def _export_tilt_data(self):
         path, _ = QFileDialog.getSaveFileName(self, "Export Tilt Data", "", "CSV Files (*.csv)")
-        if not path: return
+        if not path:
+            return
         try:
             with open(path, 'w', newline='') as f:
                 writer = csv.writer(f)
@@ -373,60 +488,65 @@ class MainWindow(QMainWindow):
             QMessageBox.information(self, "Export Successful", f"Data exported to:\n{path}")
         except Exception as e:
             QMessageBox.critical(self, "Export Failed", f"Could not write file:\n{e}")
-    
+
     def _send_manual_command(self):
         if not self._check_connection() or self.is_busy:
             return
-        
         command_text = self.manual_cmd_input.text().strip()
         if not command_text:
             self._set_status("Manual command is empty.")
             return
-        
         self._log_message(command_text, "TX")
         self.serial.send(f"{command_text}\n".encode())
         self.manual_cmd_input.clear()
 
+    # --------------------------------------------------------------------
+    # 3D view
+    # --------------------------------------------------------------------
     def _setup_3d_view(self):
-            """Creates the 3D objects for the accelerometer visualization."""
-            
-            # Create the green rectangular body of the accelerometer
-            verts = np.array([
-                [-10, -5, -1], [10, -5, -1], [10, 5, -1], [-10, 5, -1],
-                [-10, -5, 1], [10, -5, 1], [10, 5, 1], [-10, 5, 1]
-            ])
-            faces = np.array([
-                [0, 1, 2], [0, 2, 3], [4, 5, 6], [4, 6, 7], [0, 1, 5], [0, 5, 4],
-                [2, 3, 7], [2, 7, 6], [0, 3, 7], [0, 7, 4], [1, 2, 6], [1, 6, 5]
-            ])
-            colors = np.array([[0.3, 0.8, 0.3, 0.8]] * 12) # Semi-transparent green
+        # Create the rectangular body of the accelerometer
+        verts = np.array([
+            [-10, -5, -1], [10, -5, -1], [10, 5, -1], [-10, 5, -1],
+            [-10, -5, 1], [10, -5, 1], [10, 5, 1], [-10, 5, 1]
+        ])
+        faces = np.array([
+            [0, 1, 2], [0, 2, 3], [4, 5, 6], [4, 6, 7], [0, 1, 5], [0, 5, 4],
+            [2, 3, 7], [2, 7, 6], [0, 3, 7], [0, 7, 4], [1, 2, 6], [1, 6, 5]
+        ])
+        colors = np.array([[0.3, 0.8, 0.3, 0.8]] * 12)  # Semi-transparent green
 
-            self.accel_body = gl.GLMeshItem(
-                vertexes=verts, faces=faces, faceColors=colors,
-                smooth=False, drawEdges=True, edgeColor=(0, 0, 0, 1)
-            )
-            self.gl_view.addItem(self.accel_body)
+        self.accel_body = gl.GLMeshItem(
+            vertexes=verts, faces=faces, faceColors=colors,
+            smooth=False, drawEdges=True, edgeColor=(0, 0, 0, 1)
+        )
+        self.gl_view.addItem(self.accel_body)
 
-            # Create lines for the X, Y, and Z axes originating from the center
-            origin = [0, 0, 0]
-            self.x_axis = gl.GLLinePlotItem(pos=np.array([origin, [15, 0, 0]]), color=(1, 0, 0, 1), width=3) # Red X
-            self.y_axis = gl.GLLinePlotItem(pos=np.array([origin, [0, 10, 0]]), color=(0, 1, 0, 1), width=3) # Green Y
-            self.z_axis = gl.GLLinePlotItem(pos=np.array([origin, [0, 0, 10]]), color=(0, 0, 1, 1), width=3) # Blue Z
-            
-            self.gl_view.addItem(self.x_axis)
-            self.gl_view.addItem(self.y_axis)
-            self.gl_view.addItem(self.z_axis)
+        # Create lines for the X, Y, and Z axes originating from the center
+        origin = [0, 0, 0]
+        self.x_axis = gl.GLLinePlotItem(pos=np.array([origin, [15, 0, 0]]), color=(1, 0, 0, 1), width=3)  # Red X
+        self.y_axis = gl.GLLinePlotItem(pos=np.array([origin, [0, 10, 0]]), color=(0, 1, 0, 1), width=3)  # Green Y
+        self.z_axis = gl.GLLinePlotItem(pos=np.array([origin, [0, 0, 10]]), color=(0, 0, 1, 1), width=3)  # Blue Z
 
-            self.x_label = gl.GLTextItem(pos=[17, 0, 0], text='X')
-            self.y_label = gl.GLTextItem(pos=[0, 12, 0], text='Y')
-            self.z_label = gl.GLTextItem(pos=[0, 0, 12], text='Z')
+        self.gl_view.addItem(self.x_axis)
+        self.gl_view.addItem(self.y_axis)
+        self.gl_view.addItem(self.z_axis)
 
-            self.gl_view.addItem(self.x_label)
-            self.gl_view.addItem(self.y_label)
-            self.gl_view.addItem(self.z_label)
+        self.x_label = gl.GLTextItem(pos=[17, 0, 0], text='X')
+        self.y_label = gl.GLTextItem(pos=[0, 12, 0], text='Y')
+        self.z_label = gl.GLTextItem(pos=[0, 0, 12], text='Z')
 
+        self.gl_view.addItem(self.x_label)
+        self.gl_view.addItem(self.y_label)
+        self.gl_view.addItem(self.z_label)
+
+    # --------------------------------------------------------------------
+    # Presets
+    # --------------------------------------------------------------------
     def _update_preset_labels(self):
-        """Updates the text labels for the preset positions."""
+        """Updates the text labels for the preset positions.
+        Safe-guarded so it won't crash if called early."""
+        if not hasattr(self, "preset_1_label"):
+            return
         steps_per_mm = self._steps_per_rev / self._lead_mm
         for num, pos in self._preset_positions.items():
             label = getattr(self, f"preset_{num}_label")
@@ -438,30 +558,40 @@ class MainWindow(QMainWindow):
 
     def _save_preset_position(self, preset_num):
         """Asks the Arduino for its position to save it."""
-        if not self._check_connection() or self.is_busy: return
-        self._log_message(f"Requesting position for Preset {preset_num}", "TX")
+        if not self._check_connection() or self.is_busy:
+            return
+        self._log_message(f"GET_POS (save preset {preset_num})", "TX")
         self._waiting_for_pos_to_save = preset_num
-        self.serial.send("GET_POS\n".encode())
+        self.serial.send(b"GET_POS\n")
 
     def _go_to_preset_position(self, preset_num):
         """Sends a command to move to a saved preset position."""
-        if not self._check_connection() or self.is_busy: return
+        if not self._check_connection() or self.is_busy:
+            return
         target_pos = self._preset_positions.get(preset_num)
         if target_pos is None:
             self._set_status(f"Preset {preset_num} is not set.")
             return
-
         steps_to_move = target_pos - self._current_position
         degs_to_move = (steps_to_move / self._steps_per_rev) * 360.0
-        
+
+        # Optional: avoid tiny no-op moves
+        if abs(degs_to_move) < 0.01:
+            self._set_status(f"Already at Preset {preset_num}.")
+            return
+
         command = f"MOVE {degs_to_move:.2f}\n"
         self._log_message(command.strip(), "TX")
         self._lock_ui(f"Moving to Preset {preset_num}...")
         self.serial.send(command.encode())
 
+    # --------------------------------------------------------------------
+    # Command entry
+    # --------------------------------------------------------------------
     def _send_command_from_fields(self):
-        if not self._check_connection() or self.is_busy: return
-        sign  = 1 if self.cmd_dir_combo.currentText().lower().startswith("up") else -1
+        if not self._check_connection() or self.is_busy:
+            return
+        sign = 1 if self.cmd_dir_combo.currentText().lower().startswith("up") else -1
         value = self.cmd_value_spin.value()
         if self.cmd_unit_combo.currentText().lower().startswith("mill"):
             value = (value / self._lead_mm) * 360.0
@@ -471,8 +601,16 @@ class MainWindow(QMainWindow):
         self.serial.send(command.encode())
 
     def _cancel_command(self):
-        if not self._check_connection(): return
+        if not self._check_connection():
+            return
         self._set_status("Cancelling command...")
         self._log_message("STOP", "TX")
         self.serial.send(b"STOP\n")
 
+    def _set_zero_here(self):
+        """Set current position as zero WITHOUT moving the motor."""
+        if not self._check_connection() or self.is_busy:
+            return
+        self._set_status("Setting zero (no motion)...")
+        self._log_message("SET_ZERO", "TX")
+        self.serial.send(b"SET_ZERO\n")
