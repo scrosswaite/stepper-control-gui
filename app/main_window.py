@@ -58,6 +58,11 @@ class MainWindow(QMainWindow):
         self._all_tilt_zs = []
 
         self.export_btn.clicked.connect(self._export_tilt_data)
+        self.manual_cmd_send_btn.clicked.connect(self._send_manual_command)
+        self.cmd_send_btn.clicked.connect(self._send_command_from_fields)
+        self.cancel_cmd_btn.clicked.connect(self._cancel_command)   # or another cancel handler if you have one
+        self.zero_cmd_btn.clicked.connect(self._send_zero)
+
 
         self.led_power  = LedIndicator(self.led_power)
         self.led_ready  = LedIndicator(self.led_ready)
@@ -133,36 +138,29 @@ class MainWindow(QMainWindow):
 
     def _on_serial_data(self, line: str):
         self._log_message(line, "RX")
+        line = line.strip()
 
         if line == "HOMED" or line.startswith("MOVED"):
             self._unlock_ui("Task complete.")
-        
-        if line == "CALIBRATE":
+
+        elif line == "CALIBRATE":
             self._start_calibration_dialog()
 
-        if line.startswith("TILT"):
-            # --- MODIFIED & FIXED SECTION ---
+        elif line.startswith("TILT"):
             data = line[4:].strip().split()
-            # Revert to the old format check since position is no longer sent
             if len(data) >= 2:
                 try:
                     pitch = float(data[0])
-                    roll = float(data[1])
-                    yaw = 0.0 #placeholder until we have better accelerometer 
+                    roll  = float(data[1])
+                    yaw   = 0.0  # placeholder
 
-                    items_to_rotate = [
-                        self.accel_body, 
-                        self.x_axis, self.y_axis, self.z_axis,
-                        self.x_label, self.y_label, self.z_label
-                    ]
-
-                    # Apply rotation to all four 3D objects (body + 3 axes)
+                    # Rotate body and axes
                     for item in [self.accel_body, self.x_axis, self.y_axis, self.z_axis]:
                         item.resetTransform()
-                        item.rotate(pitch, 1, 0, 0) # Rotate around X-axis
-                        item.rotate(roll, 0, 1, 0)  # Rotate around Y-axis
-                    
-                    # (The rest of the tilt data processing is the same)
+                        item.rotate(pitch, 1, 0, 0)
+                        item.rotate(roll,  0, 1, 0)
+
+                    # Update buffers and labels
                     self._tilt_buffer_x.append(pitch)
                     self._tilt_buffer_y.append(roll)
                     self._tilt_buffer_z.append(yaw)
@@ -173,6 +171,7 @@ class MainWindow(QMainWindow):
                     self.tilt_y_label.setText(f"{avg_r:.2f}")
                     self.tilt_z_label.setText(f"{avg_y:.2f}")
 
+                    # Update plots
                     t = time.time() - self._plot_start
                     self._times.append(t)
                     self._tilt_xs.append(avg_p)
@@ -183,14 +182,19 @@ class MainWindow(QMainWindow):
                     self._all_tilt_ys.append(avg_r)
                     self._all_tilt_zs.append(avg_y)
                     self._refresh_tilt_plot()
-              
 
                 except ValueError:
                     pass
+
         elif line.startswith("LIMIT"):
             QMessageBox.warning(self, "Limit Switch Hit", "A limit switch was activated!")
             self._unlock_ui("Limit reached — stopped")
             self.led_error.on()
+
+        elif any(line.upper().startswith(s) for s in ("CANCEL", "STOP", "ABORT")):
+            self._unlock_ui("Command cancelled.")
+
+
 
     def _on_serial_error(self, err: Exception):
         self._set_status(f"Serial error: {err}")
@@ -363,7 +367,7 @@ class MainWindow(QMainWindow):
         try:
             with open(path, 'w', newline='') as f:
                 writer = csv.writer(f)
-                writer.writerow(["Time (s)", "Tilt X (°)", "Tilt Y (°)"])
+                writer.writerow(["Time (s)", "Tilt X (°)", "Tilt Y (°)", "Tilt Z (°)"])
                 for t, x, y, z in zip(self._all_times, self._all_tilt_xs, self._all_tilt_ys, self._all_tilt_zs):
                     writer.writerow([f"{t:.3f}", f"{x:.3f}", f"{y:.3f}", f"{z:.3f}"])
             QMessageBox.information(self, "Export Successful", f"Data exported to:\n{path}")
@@ -455,4 +459,20 @@ class MainWindow(QMainWindow):
         self._lock_ui(f"Moving to Preset {preset_num}...")
         self.serial.send(command.encode())
 
-          
+    def _send_command_from_fields(self):
+        if not self._check_connection() or self.is_busy: return
+        sign  = 1 if self.cmd_dir_combo.currentText().lower().startswith("up") else -1
+        value = self.cmd_value_spin.value()
+        if self.cmd_unit_combo.currentText().lower().startswith("mill"):
+            value = (value / self._lead_mm) * 360.0
+        command = f"MOVE {sign * value:.2f}\n"
+        self._lock_ui("Moving...")
+        self._log_message(command.strip(), "TX")
+        self.serial.send(command.encode())
+
+    def _cancel_command(self):
+        if not self._check_connection(): return
+        self._set_status("Cancelling command...")
+        self._log_message("STOP", "TX")
+        self.serial.send(b"STOP\n")
+

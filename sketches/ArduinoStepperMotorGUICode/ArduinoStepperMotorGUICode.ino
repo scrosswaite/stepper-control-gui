@@ -1,187 +1,214 @@
 #include <Arduino.h>
 #include <Wire.h>
 #include <MPU6050.h>
-#include <ezButton.h> // <-- NEW: Include the button library
-
-// --- Pin Assignments ---
-const int ENA_PIN = 6;
-const int DIR_PIN = 5;
-const int PUL_PIN = 4;
-const int LIMIT1_PIN = 2;
-const int LIMIT2_PIN = 3;
-const int LED_MOVING_PIN = A3;
+#include <ezButton.h>
+#include <Stepper.h>
 
 // --- Motion Parameters ---
 const int STEPS_PER_REV = 200;
-const unsigned long PULSE_US = 200;
-const int STEPS_PER_MM = STEPS_PER_REV / 2; // Assuming 2mm lead screw
-const int JOG_STEPS = STEPS_PER_MM / 2; // 0.5mm jog
-const long DUNK_STEPS = 50L * STEPS_PER_MM; // 50mm dunk
+const int STEPS_PER_MM  = STEPS_PER_REV / 12;   //  12mm lead screw
+const int JOG_STEPS     = STEPS_PER_MM / 2;    // 0.5mm jog
+const long DUNK_STEPS   = 50L * STEPS_PER_MM;  // 50mm dunk
+
+// --- Pin Assignments ---
+// L298N IN pins (motor coils)
+const int IN1_PIN = 8;
+const int IN2_PIN = 9;
+const int IN3_PIN = 10;
+const int IN4_PIN = 11;
+
+// Limit switches (active LOW with pullups)
+const int LIMIT1_PIN = 2;
+const int LIMIT2_PIN = 3;
+
+// Status LED
+const int LED_MOVING_PIN = A3;
+
+// Buttons (moved to avoid conflict with IN1–IN4)
+const int BTN_FWD_PIN   = 4;
+const int BTN_REV_PIN   = 5;
+const int BTN_HOME_PIN  = 6;
+const int BTN_DUNK_PIN  = 7;
+const int BTN_CALIB_PIN = 12;
 
 // --- Global State ---
 long currentPosition = 0;
 bool isMoving = false;
 unsigned long lastTiltTime = 0;
+volatile bool cancelRequested = false;
 
-// --- Object Initialization ---
+// --- Objects ---
 MPU6050 mpu;
+Stepper myStepper(STEPS_PER_REV, IN1_PIN, IN3_PIN, IN2_PIN, IN4_PIN); // (pin order for L298N)
 
-// NEW: Create ezButton objects for each switch
-ezButton buttonFwd(9);
-ezButton buttonRev(8);
-ezButton buttonHome(12);
-ezButton buttonDunk(11);
-ezButton buttonCalib(10);
+ezButton buttonFwd(BTN_FWD_PIN);
+ezButton buttonRev(BTN_REV_PIN);
+ezButton buttonHome(BTN_HOME_PIN);
+ezButton buttonDunk(BTN_DUNK_PIN);
+ezButton buttonCalib(BTN_CALIB_PIN);
 
-// --- Helper Functions ---
-
+// --- Helpers ---
 bool limitReached() {
-    return (digitalRead(LIMIT1_PIN) == LOW || digitalRead(LIMIT2_PIN) == LOW);
+  return (digitalRead(LIMIT1_PIN) == LOW || digitalRead(LIMIT2_PIN) == LOW);
 }
 
-void doSteps(long steps, int dir) {
-    if (isMoving) return; // Prevent new moves while already moving
+// Interruptible step loop with limit & cancel checks
+void moveMotor(long steps) {
+  if (isMoving) return;
 
-    digitalWrite(DIR_PIN, dir > 0 ? HIGH : LOW);
-    isMoving = true;
-    digitalWrite(LED_MOVING_PIN, HIGH);
+  // Pre-check: don't start if already against limit in that direction
+  if ((steps > 0 && digitalRead(LIMIT1_PIN) == LOW) ||
+      (steps < 0 && digitalRead(LIMIT2_PIN) == LOW)) {
+    Serial.println("LIMIT");
+    return;
+  }
 
-    for (long i = 0; i < abs(steps); ++i) {
-        if (!isMoving || limitReached()) {
-            if (limitReached()) {
-            Serial.println("LIMIT"); // Send limit signal to GUI
-            }
-            break;
-        }
-        digitalWrite(PUL_PIN, HIGH);
-        delayMicroseconds(PULSE_US);
-        digitalWrite(PUL_PIN, LOW);
-        delayMicroseconds(PULSE_US);
-        currentPosition += (dir > 0 ? +1 : -1);
+  isMoving = true;
+  digitalWrite(LED_MOVING_PIN, HIGH);
+
+  long remaining = labs(steps);
+  int dir = (steps >= 0) ? 1 : -1;
+  long moved = 0;
+
+  while (remaining > 0) {
+    if (cancelRequested) {
+      cancelRequested = false;
+      Serial.println("STOPPED");
+      break;
+    }
+    if ((dir > 0 && digitalRead(LIMIT1_PIN) == LOW) ||
+        (dir < 0 && digitalRead(LIMIT2_PIN) == LOW)) {
+      Serial.println("LIMIT");
+      break;
     }
 
-    isMoving = false;
-    digitalWrite(LED_MOVING_PIN, LOW);
-    // Send a confirmation message back to the GUI
-    if (dir != 0) { // Don't send for homing
-        Serial.print("MOVED ");
-        Serial.println((float)steps / STEPS_PER_REV * 360.0, 2);
-    }
+    myStepper.step(dir);   // one step in chosen direction (blocking for this single step)
+    currentPosition += dir;
+    moved += dir;
+    remaining--;
+  }
+
+  digitalWrite(LED_MOVING_PIN, LOW);
+  isMoving = false;
+
+  // Always report position after a motion attempt
+  Serial.print("POS ");
+  Serial.println(currentPosition);
+
+  // If we completed the requested motion fully, report MOVED <deg>
+  if (remaining == 0) {
+    float degMoved = (float)moved / STEPS_PER_REV * 360.0f;
+    Serial.print("MOVED ");
+    Serial.println(degMoved, 2);
+  }
 }
 
 void computePitchRoll(float &pitch, float &roll) {
-    int16_t ax, ay, az;
-    mpu.getAcceleration(&ax, &ay, &az);
-    float fAx = ax / 16384.0;
-    float fAy = ay / 16384.0;
-    float fAz = az / 16384.0;
-    pitch = atan2(fAy, sqrt(fAx * fAx + fAz * fAz)) * 180.0 / PI;
-    roll = atan2(-fAx, fAz) * 180.0 / PI;
+  int16_t ax, ay, az;
+  mpu.getAcceleration(&ax, &ay, &az);
+  float fAx = ax / 16384.0f;
+  float fAy = ay / 16384.0f;
+  float fAz = az / 16384.0f;
+  pitch = atan2(fAy, sqrt(fAx * fAx + fAz * fAz)) * 180.0f / PI;
+  roll  = atan2(-fAx, fAz) * 180.0f / PI;
 }
 
 void handleSerialCommands() {
-    if (Serial.available()) {
-        String cmd = Serial.readStringUntil('\n');
-        cmd.trim();
+  if (Serial.available()) {
+    String cmd = Serial.readStringUntil('\n');
+    cmd.trim();
 
-        if (cmd.startsWith("MOVE ")) {
-            float deg = cmd.substring(5).toFloat();
-            long steps = lround((deg / 360.0) * STEPS_PER_REV);
-            doSteps(steps, (deg > 0 ? +1 : -1));
-        } else if (cmd == "HOME") {
-            doSteps(abs(currentPosition), (currentPosition > 0 ? -1 : +1));
-            currentPosition = 0;
-            Serial.println("HOMED");
-        } else if (cmd == "DUNK") {
-            doSteps(DUNK_STEPS, -1);
-        } else if (cmd == "LEVEL") {
-            Serial.println("LEVELING"); // Placeholder for future logic
-        } else if (cmd == "ESTOP") {
-            digitalWrite(ENA_PIN, HIGH);
-            isMoving = false;
-            Serial.println("ESTOP");
-        }
-        else if (cmd == "RESET") {
-            digitalWrite(ENA_PIN, LOW);
-            Serial.println("RESET");
-        }
-        else if (cmd == "GET_POS") {
-            Serial.print("POS ");
-            Serial.println(currentPosition);
-        }
+    if (cmd.startsWith("MOVE ")) {
+      float deg = cmd.substring(5).toFloat();
+      long steps = lround((deg / 360.0f) * STEPS_PER_REV);
+      moveMotor(steps);
     }
+    else if (cmd == "HOME") {
+      moveMotor(-currentPosition); // move back to zero
+      currentPosition = 0;
+      Serial.println("HOMED");
+      Serial.print("POS ");
+      Serial.println(currentPosition);
+    }
+    else if (cmd == "DUNK") {
+      moveMotor(-DUNK_STEPS);
+    }
+    else if (cmd == "GET_POS") {
+      Serial.print("POS ");
+      Serial.println(currentPosition);
+    }
+    else if (cmd == "STOP" || cmd == "CANCEL") {
+      cancelRequested = true;
+      Serial.println("STOPPING");
+    }
+    else if (cmd == "ESTOP") {
+      cancelRequested = true;
+      Serial.println("ESTOP");
+    }
+  }
 }
 
 void handleButtons() {
-    buttonFwd.loop();
-    buttonRev.loop();
-    buttonHome.loop();
-    buttonDunk.loop();
-    buttonCalib.loop();
+  buttonFwd.loop(); buttonRev.loop(); buttonHome.loop(); buttonDunk.loop(); buttonCalib.loop();
 
-    if (buttonFwd.isPressed()) {
-        doSteps(JOG_STEPS, +1);
-    }
-    if (buttonRev.isPressed()) {
-        doSteps(JOG_STEPS, -1);
-    }
-    if (buttonHome.isPressed()) {
-        doSteps(abs(currentPosition), (currentPosition > 0 ? -1 : +1));
-        currentPosition = 0;
-        Serial.println("HOMED");
-    }
-    if (buttonDunk.isPressed()) {
-        doSteps(DUNK_STEPS, -1);
-    }
-    if (buttonCalib.isPressed()) {
-        Serial.println("CALIBRATE"); // Signal to GUI to start calibration
-    }
+  if (buttonFwd.isPressed())  { moveMotor(JOG_STEPS); }
+  if (buttonRev.isPressed())  { moveMotor(-JOG_STEPS); }
+  if (buttonHome.isPressed()) {
+    moveMotor(-currentPosition);
+    currentPosition = 0;
+    Serial.println("HOMED");
+    Serial.print("POS ");
+    Serial.println(currentPosition);
+  }
+  if (buttonDunk.isPressed()) { moveMotor(-DUNK_STEPS); }
+  if (buttonCalib.isPressed()){ Serial.println("CALIBRATE"); }
 }
 
-// --- Main Setup and Loop ---
-
+// --- Setup & Loop ---
 void setup() {
-    Serial.begin(9600);
-    Serial.println("Stepper ready");
+  Serial.begin(9600);
+  Serial.setTimeout(50);
+  Serial.println("Stepper ready");
 
-    Wire.begin();
-    mpu.initialize();
-    if (!mpu.testConnection()) {
-        Serial.println("MPU6050 connection failed!");
-    }
+  Wire.begin();
+  mpu.initialize();
+  if (!mpu.testConnection()) {
+    Serial.println("MPU6050 connection failed!");
+  }
 
-    pinMode(ENA_PIN, OUTPUT);
-    pinMode(DIR_PIN, OUTPUT);
-    pinMode(PUL_PIN, OUTPUT);
-    digitalWrite(ENA_PIN, LOW); // Enable driver (active low)
+  myStepper.setSpeed(100); // RPM
 
-    pinMode(LIMIT1_PIN, INPUT_PULLUP);
-    pinMode(LIMIT2_PIN, INPUT_PULLUP);
-    pinMode(LED_MOVING_PIN, OUTPUT);
-    
-    // Set debounce time for all buttons
-    buttonFwd.setDebounceTime(50);
-    buttonRev.setDebounceTime(50);
-    buttonHome.setDebounceTime(50);
-    buttonDunk.setDebounceTime(50);
-    buttonCalib.setDebounceTime(50);
+  pinMode(LIMIT1_PIN, INPUT_PULLUP);
+  pinMode(LIMIT2_PIN, INPUT_PULLUP);
+  pinMode(LED_MOVING_PIN, OUTPUT);
+
+  pinMode(BTN_FWD_PIN,   INPUT_PULLUP);
+  pinMode(BTN_REV_PIN,   INPUT_PULLUP);
+  pinMode(BTN_HOME_PIN,  INPUT_PULLUP);
+  pinMode(BTN_DUNK_PIN,  INPUT_PULLUP);
+  pinMode(BTN_CALIB_PIN, INPUT_PULLUP);
+
+  buttonFwd.setDebounceTime(50);
+  buttonRev.setDebounceTime(50);
+  buttonHome.setDebounceTime(50);
+  buttonDunk.setDebounceTime(50);
+  buttonCalib.setDebounceTime(50);
 }
 
 void loop() {
-    handleButtons();
-    handleSerialCommands();
+  handleButtons();
+  handleSerialCommands();
 
-    unsigned long now = millis();
-    if (now - lastTiltTime >= 100) {
-        lastTiltTime = now;
-        float pitch, roll;
-        computePitchRoll(pitch, roll);
-        
-        Serial.print("TILT ");
-        Serial.print(pitch, 2);
-        Serial.print(" ");
-        Serial.print(roll, 2);
-        //Serial.print(" "); // Add a space for the position
-        //Serial.println(currentPosition); // Send the current step position
-    }
+  unsigned long now = millis();
+  if (now - lastTiltTime >= 100) {
+    lastTiltTime = now;
+    float pitch, roll;
+    computePitchRoll(pitch, roll);
+
+    Serial.print("TILT ");
+    Serial.print(pitch, 2);
+    Serial.print(" ");
+    Serial.println(roll, 2);
+    // (position omitted from TILT to match GUI parser)
+  }
 }

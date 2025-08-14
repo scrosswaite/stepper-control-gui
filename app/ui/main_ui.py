@@ -1,7 +1,9 @@
 import os
 import pyqtgraph.opengl as gl
+
 from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
 from matplotlib.figure import Figure 
+
 from PyQt5.QtCore    import Qt
 from PyQt5.QtGui     import QFontMetrics, QPixmap
 from PyQt5.QtWidgets import (
@@ -25,9 +27,9 @@ def setup_ui(window):
         window.logo_label.setPixmap(pix)
 
     # — Widgets —
-    window.port_combo        = QComboBox()
-    window.refresh_btn       = QPushButton("Refresh")
-    window.connect_btn       = QPushButton("Connect")
+    window.port_combo = QComboBox()
+    window.refresh_btn = QPushButton("Refresh")
+    window.connect_btn = QPushButton("Connect")
     window.refresh_btn.setObjectName("refreshButton")
     window.connect_btn.setObjectName("connectButton")
 
@@ -39,10 +41,10 @@ def setup_ui(window):
 
     window.status = QLabel("Disconnected")
 
-    window.fluid_input    = QLineEdit()
+    window.fluid_input = QLineEdit()
     window.fluid_input.setPlaceholderText("Enter fluid type…")
     window.distance_label = QLabel("0.00")
-    window.depth_label    = QLabel("0.00")
+    window.depth_label = QLabel("0.00")
 
     window.state_label = QLabel("stationary")
     fnt = window.state_label.font()
@@ -249,8 +251,8 @@ def setup_ui(window):
     # 3) Build the Levelling tab
     lev_tab    = QWidget()
     lev_layout = QVBoxLayout(lev_tab)
-    lev_layout.addWidget(lev_group)
-    lev_layout.addWidget(window.tilt_canvas)
+    #lev_layout.addWidget(lev_group)
+    #lev_layout.addWidget(window.tilt_canvas)
 
     # Add 3D view
     view_group = QGroupBox("Live Platform View")
@@ -271,7 +273,7 @@ def setup_ui(window):
     
     # Export Button
     window.export_btn = QPushButton("Export Tilt Data")
-    window.export_btn.setObjectName = ("exportButton")
+    window.export_btn.setObjectName("exportButton")
     window.export_btn.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
     lev_layout.addWidget(window.export_btn)
 
