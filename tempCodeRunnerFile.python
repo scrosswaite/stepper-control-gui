@@ -1,0 +1,31 @@
+import sys
+import pyvista as pv
+from PyQt5 import QtWidgets
+from pyvistaqt import QtInteractor   # ✅ new import
+
+class FusionViewer(QtWidgets.QMainWindow):
+    def __init__(self, filename):
+        super().__init__()
+        self.setWindowTitle("Fusion 3D Model Viewer")
+
+        # Create a plotter widget
+        self.plotter = QtInteractor(self)   # ✅ now works
+        self.setCentralWidget(self.plotter)
+
+        # Load STL/OBJ model
+        mesh = pv.read(filename)
+
+        # Add model
+        self.plotter.add_mesh(mesh, color="lightgreen", show_edges=True)
+
+        # Add coordinate axes
+        self.plotter.show_axes()
+
+        # Reset camera
+        self.plotter.reset_camera()
+
+if __name__ == "__main__":
+    app = QtWidgets.QApplication(sys.argv)
+    viewer = FusionViewer("model.stl")  # Replace with your Fusion export
+    viewer.show()
+    sys.exit(app.exec_())

@@ -121,7 +121,7 @@ void moveMotor(long steps) {
   digitalWrite(LED_MOVING_PIN, LOW);
   isMoving = false;
 
-  // NEW: cut idle current unless holding torque requested
+  // cut idle current unless holding torque requested
   if (!holdTorque) {
     coilsOff();
   }
