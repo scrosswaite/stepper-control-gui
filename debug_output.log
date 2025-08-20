@@ -1,4 +1,8 @@
 Command received: up
 Attempting to connect to specified port: COM7...
-An error occurred: No response from Arduino
+Successfully connected to COM7.
+Distance value received: 15.0 mm
+Sending serial command: MOVE 1350.00
+Command sent to actuator.
+Disconnected from serial port.
 --- Script Finished ---
