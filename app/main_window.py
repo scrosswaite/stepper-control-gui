@@ -236,6 +236,10 @@ class MainWindow(QMainWindow):
                     self.tilt_y_label.setText(f"{avg_r:.2f}")
                     self.tilt_z_label.setText(f"{avg_y:.2f}")
 
+                    # excel stuff
+                    with open("tilt_data.csv", "w") as f:
+                        f.write(f"{avg_p:.2f},{avg_r:.2f},{avg_y:.2f}")
+
                     # Update plots
                     t = time.time() - self._plot_start
                     self._times.append(t)
