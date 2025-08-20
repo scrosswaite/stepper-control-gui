@@ -71,7 +71,7 @@ void processCommand(String cmd) {
     Serial.println(cmd == "ESTOP" ? "ESTOP" : "STOPPING");
   } else if (cmd == "HOLD ON") {
     holdTorque = true;
-    enableMotor(); 
+    enableMotor();
     Serial.println("HOLD ON");
   } else if (cmd == "HOLD OFF") {
     holdTorque = false;
@@ -140,10 +140,10 @@ void setup() {
   stepper.setMaxSpeed(1000);
   stepper.setAcceleration(500);
   stepper.setEnablePin(ENA_PIN);
-  stepper.setPinsInverted(false, false, true); 
-  
+  stepper.setPinsInverted(false, false, true);
+
   disableMotor();
-  
+
   pinMode(LIMIT1_PIN, INPUT_PULLUP);
   pinMode(LIMIT2_PIN, INPUT_PULLUP);
   pinMode(LED_MOVING_PIN, OUTPUT);
@@ -186,10 +186,11 @@ void loop() {
       Serial.println("LIMIT");
     }
   }
-  
+
   // Actions to do ONCE when a move STOPS
   if (wasRunning && !isRunning) {
     digitalWrite(LED_MOVING_PIN, LOW);
+    Serial.println("MOVED"); // <<< FIX IS HERE
     Serial.print("POS ");
     Serial.println(stepper.currentPosition());
     if (!holdTorque) {
