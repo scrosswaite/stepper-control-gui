@@ -1,0 +1,4 @@
+Command received: up
+Attempting to connect to specified port: COM7...
+An error occurred: No response from Arduino
+--- Script Finished ---
