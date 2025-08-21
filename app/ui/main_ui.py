@@ -345,6 +345,35 @@ def setup_ui(window):
     # 5) Finally add this tab to the tab widget
     tabs.addTab(setup_tab, "Settings")
 
+    # --- Viscometer Data tab ---
+    visco_tab = QWidget()
+    visco_layout = QVBoxLayout(visco_tab)
+
+    # live readout labels
+    window.vp_vl_label = QLabel("Viscosity: -- cP")
+    window.vp_temp_label = QLabel("Temperature: -- °C")
+    visco_layout.addWidget(window.vp_vl_label)
+    visco_layout.addWidget(window.vp_temp_label)
+
+    # Matplotlib figure: two stacked plots (share x = time)
+    window.visco_fig = Figure(figsize=(5, 3))
+    window.visco_canvas = FigureCanvas(window.visco_fig)
+    window.visco_ax_v = window.visco_fig.add_subplot(211)
+    window.visco_ax_t = window.visco_fig.add_subplot(212, sharex=window.visco_ax_v)
+
+    window.visco_ax_v.set_ylabel("Viscosity (cP)")
+    window.visco_ax_v.grid(True, which="major", linestyle="--", linewidth=0.5)
+    window.visco_ax_t.set_xlabel("Time (s)")
+    window.visco_ax_t.set_ylabel("Temp (°C)")
+    window.visco_ax_t.grid(True, which="major", linestyle="--", linewidth=0.5)
+    window.visco_fig.tight_layout()
+
+    visco_layout.addWidget(window.visco_canvas)
+
+    # add the tab
+    tabs.addTab(visco_tab, "Viscometer Data")
+
+
     # Ensure tabs are central widget
     window.setCentralWidget(tabs)
 

@@ -16,6 +16,7 @@ from app.controllers.serial_controller import SerialController
 from app.controllers.calibration_manager import CalibrationManager
 from app.utils.led_indicator import LedIndicator
 from app.utils.config_manager import ConfigManager
+from app.controllers.modbus_controller import ModbusWorker, ModbusConfig
 
 
 class MainWindow(QMainWindow):
@@ -137,6 +138,31 @@ class MainWindow(QMainWindow):
         self.go_pos_2_btn.clicked.connect(lambda: self._go_to_preset_position("2"))
         self.save_pos_3_btn.clicked.connect(lambda: self._save_preset_position("3"))
         self.go_pos_3_btn.clicked.connect(lambda: self._go_to_preset_position("3"))
+
+        # ---- Viscometer data buffers ----
+        self._visco_times = []
+        self._visco_vl = []
+        self._visco_tC = []
+        self._visco_start = time.time()
+        self._visco_max_points = 600  # keep last ~10 minutes at 1 Hz
+
+        # ---- Start Modbus worker (set your working COM & mode) ----
+        self._visco_worker = ModbusWorker(
+            ModbusConfig(
+                port="COM9",      # <-- set to the RS-485 COM port that worked in your test
+                method="rtu",     # or "ascii" if you set the VP250 to ASCII
+                unit_id=1,
+                baudrate=9600, parity="E", bytesize=8, stopbits=1,
+                poll_ms=1000,
+                byteorder="big", wordorder="big",
+            )
+        )
+        self._visco_worker.data.connect(self._on_visco_data)
+        self._visco_worker.error.connect(lambda e: self._set_status(f"Viscometer: {e}"))
+        self._visco_worker.connection_changed.connect(lambda ok: self._set_status(
+            "Viscometer connected" if ok else "Viscometer disconnected"))
+        self._visco_worker.start()
+
 
     # --------------------------------------------------------------------
     # Helpers / UI state
@@ -398,14 +424,23 @@ class MainWindow(QMainWindow):
 
     def closeEvent(self, event):
         reply = QMessageBox.question(self, "Confirm Exit",
-                                     "Are you sure you want to quit?",
-                                     QMessageBox.Yes | QMessageBox.No,
-                                     QMessageBox.No)
+                                    "Are you sure you want to quit?",
+                                    QMessageBox.Yes | QMessageBox.No,
+                                    QMessageBox.No)
         if reply == QMessageBox.Yes:
+            # stop viscometer worker if running
+            try:
+                if getattr(self, "_visco_worker", None):
+                    self._visco_worker.stop()
+                    self._visco_worker.wait(1500)
+            except Exception:
+                pass
+
             self._save_settings()
             event.accept()
         else:
             event.ignore()
+
 
     # --------------------------------------------------------------------
     # Connection
@@ -618,3 +653,45 @@ class MainWindow(QMainWindow):
         self._set_status("Setting zero (no motion)...")
         self._log_message("SET_ZERO", "TX")
         self.serial.send(b"SET_ZERO\n")
+
+    def _on_visco_data(self, d: dict):
+        # update live labels
+        try:
+            self.vp_vl_label.setText(f"Viscosity: {d['vl']:.2f} cP")
+            self.vp_temp_label.setText(f"Temperature: {d['t']:.1f} °C")
+        except Exception:
+            pass
+
+        # append to buffers (rolling window)
+        t = time.time() - self._visco_start
+        self._visco_times.append(t)
+        self._visco_vl.append(d["vl"])
+        self._visco_tC.append(d["t"])
+
+        if len(self._visco_times) > self._visco_max_points:
+            self._visco_times = self._visco_times[-self._visco_max_points:]
+            self._visco_vl    = self._visco_vl[-self._visco_max_points:]
+            self._visco_tC    = self._visco_tC[-self._visco_max_points:]
+
+        self._refresh_visco_plot()
+
+    def _refresh_visco_plot(self):
+        # guard if UI not yet built
+        if not hasattr(self, "visco_ax_v"):
+            return
+        self.visco_ax_v.clear()
+        self.visco_ax_t.clear()
+
+        # draw
+        self.visco_ax_v.plot(self._visco_times, self._visco_vl, label="Viscosity", linewidth=2)
+        self.visco_ax_t.plot(self._visco_times, self._visco_tC, label="Temperature", linewidth=2)
+
+        # cosmetics
+        self.visco_ax_v.set_ylabel("Viscosity (cP)")
+        self.visco_ax_v.grid(True, linestyle="--", linewidth=0.5)
+        self.visco_ax_t.set_xlabel("Time (s)")
+        self.visco_ax_t.set_ylabel("Temp (°C)")
+        self.visco_ax_t.grid(True, linestyle="--", linewidth=0.5)
+
+        self.visco_fig.tight_layout()
+        self.visco_canvas.draw()
