@@ -51,6 +51,11 @@ class ModbusConfig:
     poll_ms: int = 1000  # ~1 Hz polling (device guidance)
     byteorder: str = "big"
     wordorder: str = "big"  # flip to "little" if floats look wrong
+    density_float_addr: Optional[int] = None   # e.g. 0x1020 if your unit exposes it
+    density_u16_addr:   Optional[int] = None   # e.g. 0x0020 for scaled 16-bit
+    density_scale_lo:   float = 0.0            # used only for u16 scaling
+    density_scale_hi:   float = 2000.0         # (kg/m³) adjust to your range
+
 
 # ----------------------- worker -----------------------
 class ModbusWorker(QThread):
@@ -117,11 +122,35 @@ class ModbusWorker(QThread):
                 vl1, vl2 = self._read_f32_pair(0x1000)
                 t1,  t2  = self._read_f32_pair(0x1010)
 
+                rho = None
+                if self.cfg.density_float_addr is not None:
+                    try:
+                        rho1, _ = self._read_f32_pair(self.cfg.density_float_addr)
+                        rho = rho1
+                    except Exception:
+                        rho = None
+                elif self.cfg.density_u16_addr is not None:
+                    try:
+                        rr = self._client.read_input_registers(
+                            address=self.cfg.density_u16_addr, count=1, device_id=self.cfg.unit_id
+                        )
+                        if not rr.isError() and getattr(rr, "registers", []):
+                            raw = rr.registers[0]
+                            lo, hi = self.cfg.density_scale_lo, self.cfg.density_scale_hi
+                            rho = lo + (hi - lo) * (raw / 65535.0)
+                    except Exception:
+                        rho = None
+
                 if not connected_emitted:
                     self.connection_changed.emit(True)
                     connected_emitted = True
 
-                self.data.emit({"vl": vl1, "vl_alt": vl2, "t": t1, "t_alt": t2, "ts": time.time()})
+                self.data.emit({
+                    "vl": vl1, "vl_alt": vl2,
+                    "t": t1,   "t_alt": t2,
+                    "rho": rho,              
+                    "ts": time.time()
+                })
                 time.sleep(max(0.25, self.cfg.poll_ms / 1000.0))
 
             except Exception as e:

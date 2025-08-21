@@ -143,18 +143,37 @@ class MainWindow(QMainWindow):
         self._visco_times = []
         self._visco_vl = []
         self._visco_tC = []
+        self._visco_rho   = []
         self._visco_start = time.time()
-        self._visco_max_points = 600  # keep last ~10 minutes at 1 Hz
+        self._visco_max_points = 1200  # keep last ~20 min at 1 Hz
+
+        # Pre-create line objects on the axes created in the UI
+        # Left axis: viscosity + density; Right axis: temperature
+        self._line_v   = self.visco_ax.plot([], [], label="Viscosity (cP)", linewidth=2)[0]
+        self._line_rho = self.visco_ax.plot([], [], label="Density (kg/m³)", linestyle="--", linewidth=1.8)[0]
+        self._line_t   = self.visco_ax2.plot([], [], label="Temperature (°C)", linewidth=2)[0]
+
+        # Legend + toggles (connect ONCE)
+        self._legend = None
+        self.cb_v.stateChanged.connect(lambda s: self._toggle_line(self._line_v,   s))
+        self.cb_t.stateChanged.connect(lambda s: self._toggle_line(self._line_t,   s))
+        self.cb_rho.stateChanged.connect(lambda s: self._toggle_line(self._line_rho, s))
+
+        # Set initial visibility to match checkboxes
+        self._toggle_line(self._line_v,   self.cb_v.isChecked())
+        self._toggle_line(self._line_t,   self.cb_t.isChecked())
+        self._toggle_line(self._line_rho, self.cb_rho.isChecked())
 
         # ---- Start Modbus worker (set your working COM & mode) ----
         self._visco_worker = ModbusWorker(
             ModbusConfig(
-                port="COM9",      # <-- set to the RS-485 COM port that worked in your test
-                method="rtu",     # or "ascii" if you set the VP250 to ASCII
-                unit_id=1,
+                port="COM9", method="rtu", unit_id=1,
                 baudrate=9600, parity="E", bytesize=8, stopbits=1,
-                poll_ms=1000,
-                byteorder="big", wordorder="big",
+                poll_ms=1000, byteorder="big", wordorder="big",
+                density_float_addr=0x100B
+                # If known, uncomment ONE of these lines:
+                # density_float_addr=0x1020,
+                # density_u16_addr=0x0020, density_scale_lo=900.0, density_scale_hi=1200.0,
             )
         )
         self._visco_worker.data.connect(self._on_visco_data)
@@ -435,7 +454,7 @@ class MainWindow(QMainWindow):
                     self._visco_worker.wait(1500)
             except Exception:
                 pass
-
+            super().closeEvent(event)
             self._save_settings()
             event.accept()
         else:
@@ -655,43 +674,65 @@ class MainWindow(QMainWindow):
         self.serial.send(b"SET_ZERO\n")
 
     def _on_visco_data(self, d: dict):
-        # update live labels
+        # Labels
         try:
             self.vp_vl_label.setText(f"Viscosity: {d['vl']:.2f} cP")
             self.vp_temp_label.setText(f"Temperature: {d['t']:.1f} °C")
+            if d.get("rho") is not None:
+                self.vp_rho_label.setText(f"Density: {d['rho']:.1f} kg/m³")
+            else:
+                self.vp_rho_label.setText("Density: -- kg/m³")
         except Exception:
             pass
 
-        # append to buffers (rolling window)
+        # Buffers (use NaN for missing density so line gaps display cleanly)
         t = time.time() - self._visco_start
         self._visco_times.append(t)
         self._visco_vl.append(d["vl"])
         self._visco_tC.append(d["t"])
+        self._visco_rho.append(d["rho"] if d.get("rho") is not None else float("nan"))
 
+        # Trim window
         if len(self._visco_times) > self._visco_max_points:
             self._visco_times = self._visco_times[-self._visco_max_points:]
             self._visco_vl    = self._visco_vl[-self._visco_max_points:]
             self._visco_tC    = self._visco_tC[-self._visco_max_points:]
+            self._visco_rho   = self._visco_rho[-self._visco_max_points:]
 
         self._refresh_visco_plot()
 
     def _refresh_visco_plot(self):
-        # guard if UI not yet built
-        if not hasattr(self, "visco_ax_v"):
+        if not hasattr(self, "visco_ax"):
             return
-        self.visco_ax_v.clear()
-        self.visco_ax_t.clear()
+        x = self._visco_times
 
-        # draw
-        self.visco_ax_v.plot(self._visco_times, self._visco_vl, label="Viscosity", linewidth=2)
-        self.visco_ax_t.plot(self._visco_times, self._visco_tC, label="Temperature", linewidth=2)
+        # Update line data
+        self._line_v.set_data(x, self._visco_vl)
+        self._line_rho.set_data(x, self._visco_rho)
+        self._line_t.set_data(x, self._visco_tC)
 
-        # cosmetics
-        self.visco_ax_v.set_ylabel("Viscosity (cP)")
-        self.visco_ax_v.grid(True, linestyle="--", linewidth=0.5)
-        self.visco_ax_t.set_xlabel("Time (s)")
-        self.visco_ax_t.set_ylabel("Temp (°C)")
-        self.visco_ax_t.grid(True, linestyle="--", linewidth=0.5)
+        # Rescale axes to data currently visible
+        self.visco_ax.relim();  self.visco_ax.autoscale_view()
+        self.visco_ax2.relim(); self.visco_ax2.autoscale_view()
 
-        self.visco_fig.tight_layout()
-        self.visco_canvas.draw()
+        # Keep last window in view
+        if x:
+            xmin = max(0, x[-1] - self._visco_max_points)
+            self.visco_ax.set_xlim(left=xmin, right=x[-1] + 1)
+
+        self._rebuild_legend()
+        self.visco_canvas.draw_idle()
+
+
+    def _rebuild_legend(self):
+        lines = [l for l in (self._line_v, self._line_rho, self._line_t) if l.get_visible()]
+        labels = [l.get_label() for l in lines]
+        if getattr(self, "_legend", None):
+            self._legend.remove()
+        self._legend = self.visco_ax.legend(lines, labels, loc="upper right", frameon=True)
+
+    def _toggle_line(self, line, state):
+        line.set_visible(bool(state))
+        self._rebuild_legend()
+        self.visco_canvas.draw_idle()
+

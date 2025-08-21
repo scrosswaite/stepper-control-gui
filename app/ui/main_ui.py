@@ -10,7 +10,7 @@ from PyQt5.QtWidgets import (
     QWidget, QGroupBox, QVBoxLayout, QHBoxLayout, QFormLayout,
     QLabel, QComboBox, QLineEdit, QDoubleSpinBox, QSpinBox,
     QPushButton, QSizePolicy, QGridLayout, QTabWidget, QProgressBar,
-    QTextEdit
+    QTextEdit,QCheckBox
 )
 
 def setup_ui(window):
@@ -345,34 +345,51 @@ def setup_ui(window):
     # 5) Finally add this tab to the tab widget
     tabs.addTab(setup_tab, "Settings")
 
-    # --- Viscometer Data tab ---
+    # --- Viscometer Data tab (compact, single graph with toggles) ---
     visco_tab = QWidget()
     visco_layout = QVBoxLayout(visco_tab)
+    visco_layout.setContentsMargins(8, 8, 8, 8)
+    visco_layout.setSpacing(8)
 
-    # live readout labels
-    window.vp_vl_label = QLabel("Viscosity: -- cP")
+    # Top row: live readouts (compact)
+    top_row = QHBoxLayout()
+    top_row.setSpacing(12)
+    window.vp_vl_label   = QLabel("Viscosity: -- cP")
     window.vp_temp_label = QLabel("Temperature: -- °C")
-    visco_layout.addWidget(window.vp_vl_label)
-    visco_layout.addWidget(window.vp_temp_label)
+    window.vp_rho_label  = QLabel("Density: -- kg/m³")
+    for w in (window.vp_vl_label, window.vp_temp_label, window.vp_rho_label):
+        w.setStyleSheet("font-weight: 600;")
+    top_row.addWidget(window.vp_vl_label)
+    top_row.addWidget(window.vp_temp_label)
+    top_row.addWidget(window.vp_rho_label)
+    top_row.addStretch()
+    visco_layout.addLayout(top_row)
 
-    # Matplotlib figure: two stacked plots (share x = time)
-    window.visco_fig = Figure(figsize=(5, 3))
+    # Second row: show/hide toggles
+    toggle_row = QHBoxLayout()
+    toggle_row.setSpacing(12)
+    window.cb_v   = QCheckBox("Viscosity");   window.cb_v.setChecked(True)
+    window.cb_t   = QCheckBox("Temperature"); window.cb_t.setChecked(True)
+    window.cb_rho = QCheckBox("Density");     window.cb_rho.setChecked(False)  # off by default
+    toggle_row.addWidget(window.cb_v)
+    toggle_row.addWidget(window.cb_t)
+    toggle_row.addWidget(window.cb_rho)
+    toggle_row.addStretch()
+    visco_layout.addLayout(toggle_row)
+
+    # Matplotlib figure: one axis + right y-axis for temperature
+    window.visco_fig = Figure(figsize=(6, 3), tight_layout=True)
     window.visco_canvas = FigureCanvas(window.visco_fig)
-    window.visco_ax_v = window.visco_fig.add_subplot(211)
-    window.visco_ax_t = window.visco_fig.add_subplot(212, sharex=window.visco_ax_v)
+    window.visco_ax  = window.visco_fig.add_subplot(111)
+    window.visco_ax2 = window.visco_ax.twinx()
 
-    window.visco_ax_v.set_ylabel("Viscosity (cP)")
-    window.visco_ax_v.grid(True, which="major", linestyle="--", linewidth=0.5)
-    window.visco_ax_t.set_xlabel("Time (s)")
-    window.visco_ax_t.set_ylabel("Temp (°C)")
-    window.visco_ax_t.grid(True, which="major", linestyle="--", linewidth=0.5)
-    window.visco_fig.tight_layout()
+    window.visco_ax.set_xlabel("Time (s)")
+    window.visco_ax.set_ylabel("Viscosity / Density")
+    window.visco_ax2.set_ylabel("Temp (°C)")
+    window.visco_ax.grid(True, linestyle="--", linewidth=0.5)
 
     visco_layout.addWidget(window.visco_canvas)
-
-    # add the tab
     tabs.addTab(visco_tab, "Viscometer Data")
-
 
     # Ensure tabs are central widget
     window.setCentralWidget(tabs)
