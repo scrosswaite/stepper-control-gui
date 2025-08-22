@@ -1,5 +1,5 @@
 {
-    "lead_mm": 12.0,
+    "lead_mm": 2.0,
     "steps_per_rev": 200,
     "click_mm": 10.0,
     "comp_factor": 32.0855614973262,

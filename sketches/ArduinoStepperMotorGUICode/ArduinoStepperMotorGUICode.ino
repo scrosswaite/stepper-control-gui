@@ -137,8 +137,8 @@ void setup() {
   }
 
   pinMode(ENA_PIN, OUTPUT);
-  stepper.setMaxSpeed(1000);
-  stepper.setAcceleration(500);
+  stepper.setMaxSpeed(6000);
+  stepper.setAcceleration(1000);
   stepper.setEnablePin(ENA_PIN);
   stepper.setPinsInverted(false, false, true);
 
