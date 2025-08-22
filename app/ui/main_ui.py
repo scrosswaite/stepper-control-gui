@@ -1,18 +1,3 @@
-import os
-import pyqtgraph.opengl as gl
-
-from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
-from matplotlib.figure import Figure 
-
-from PyQt5.QtCore    import Qt
-from PyQt5.QtGui     import QFontMetrics, QPixmap
-from PyQt5.QtWidgets import (
-    QWidget, QGroupBox, QVBoxLayout, QHBoxLayout, QFormLayout,
-    QLabel, QComboBox, QLineEdit, QDoubleSpinBox, QSpinBox,
-    QPushButton, QSizePolicy, QGridLayout, QTabWidget, QProgressBar,
-    QTextEdit,QCheckBox
-)
-
 def setup_ui(window):
     # ── Hydramotion Logo ──
     window.logo_label = QLabel()
@@ -35,9 +20,7 @@ def setup_ui(window):
 
     window.arduino_indicator = QLabel()
     window.arduino_indicator.setFixedSize(16, 16)
-    window.arduino_indicator.setStyleSheet(
-        "background-color: red; border: 1px solid black;"
-    )
+    window.arduino_indicator.setStyleSheet("background-color: red; border: 1px solid black;")
 
     window.status = QLabel("Disconnected")
 
@@ -53,9 +36,7 @@ def setup_ui(window):
 
     window.motor_indicator = QLabel()
     window.motor_indicator.setFixedSize(16, 16)
-    window.motor_indicator.setStyleSheet(
-        "background-color: green; border: 1px solid black;"
-    )
+    window.motor_indicator.setStyleSheet("background-color: green; border: 1px solid black;")
 
     window.unit_combo = QComboBox()
     window.unit_combo.addItems(["Degrees", "Millimeters"])
@@ -70,7 +51,7 @@ def setup_ui(window):
         b.setObjectName(name)
         return b
 
-    window.estop_btn  = mk("estopButton",  "E‑Stop")
+    window.estop_btn  = mk("estopButton",  "E-Stop")
     window.dunk_btn   = mk("dunkButton",   "Dunk")
     window.zero_btn   = mk("zeroButton",   "Zero")
     window.calib_btn  = mk("calibButton",  "Calibrate")
@@ -123,15 +104,6 @@ def setup_ui(window):
     f_lay.addRow("Distance from Zero (mm):", window.distance_label)
     f_lay.addRow("Bob Depth (mm):",          window.depth_label)
 
-    # Motor visual indicator
-    #f_lay.addRow(QLabel("Motor Position:"))
-    #window.position_bar = QProgressBar()
-    #window.position_bar.setTextVisible(True)
-    #window.position_bar.setFormat("%v steps")
-    #f_lay.addRow(window.position_bar)
-
-
-
     # — Controls Group —
     ctrl = QGroupBox("Controls")
     ctrl_layout = QVBoxLayout(ctrl)
@@ -144,7 +116,7 @@ def setup_ui(window):
     window.calib_countdown_label = QLabel("Next step in: 0s")
     window.calib_countdown_label.setAlignment(Qt.AlignCenter)
 
-    # First row: E‑Stop, Dunk, Zero – each with equal stretch
+    # First row: E-Stop, Dunk, Zero – each with equal stretch
     row1 = QHBoxLayout()
     for b in (window.estop_btn, window.dunk_btn, window.zero_btn):
         row1.addWidget(b, 1)
@@ -164,7 +136,6 @@ def setup_ui(window):
     for w in (window.calib_btn, window.dir_panel, window.cancel_btn):
         row2.addWidget(w, 1)
     ctrl_layout.addLayout(row2)
-
 
     ctrl_layout.addWidget(window.calib_progress)
     ctrl_layout.addWidget(window.calib_countdown_label)
@@ -205,11 +176,11 @@ def setup_ui(window):
     log_layout = QVBoxLayout(log_group)
     window.command_log = QTextEdit()
     window.command_log.setReadOnly(True)
-    #window.command_log.setStyleSheet("QTextEdit { background-color: #222; color #eee; font-family: Consolas, monospace;}")
     log_layout.addWidget(window.command_log)
 
     # — Tabs assembly —
     tabs = QTabWidget()
+
     # Calibration tab
     cal_tab = QWidget()
     cal_layout = QVBoxLayout(cal_tab)
@@ -225,21 +196,20 @@ def setup_ui(window):
     cal_layout.addStretch()
     tabs.addTab(cal_tab, "Calibration")
 
-    # Create UI
-        
-    # 1) Create the levelling‐system controls
+    # Create UI (Levelling)
     window.begin_lvl_btn = QPushButton("Begin Levelling")
     window.tilt_x_label  = QLabel("0.00")
     window.tilt_y_label  = QLabel("0.00")
+    window.tilt_z_label  = QLabel("0.00")
 
     lev_group = QGroupBox("Levelling System")
     lev_form  = QFormLayout(lev_group)
     lev_form.addRow("Tilt X (°):", window.tilt_x_label)
     lev_form.addRow("Tilt Y (°):", window.tilt_y_label)
-    lev_form.addRow("Tilt Z (°):", window.tilt_z_label) # unavaliable until 9DoF accelerometer used
+    lev_form.addRow("Tilt Z (°):", window.tilt_z_label)  # unavailable until 9DoF
     lev_form.addRow(window.begin_lvl_btn)
 
-    # 2) Create the Matplotlib canvas
+    # Matplotlib canvas for Levelling
     window.tilt_fig    = Figure(figsize=(4, 2))
     window.tilt_canvas = FigureCanvas(window.tilt_fig)
     window.tilt_ax     = window.tilt_fig.add_subplot(111)
@@ -248,13 +218,11 @@ def setup_ui(window):
     window.tilt_ax.set_title("Tilt X / Y over Time")
     window.tilt_ax.minorticks_on()
 
-    # 3) Build the Levelling tab
+    # Build the Levelling tab
     lev_tab    = QWidget()
     lev_layout = QVBoxLayout(lev_tab)
-    #lev_layout.addWidget(lev_group)
-    #lev_layout.addWidget(window.tilt_canvas)
 
-    # Add 3D view
+    # 3D view
     view_group = QGroupBox("Live Platform View")
     view_layout = QVBoxLayout(view_group)
     window.gl_view = gl.GLViewWidget()
@@ -265,12 +233,9 @@ def setup_ui(window):
     top_layout = QHBoxLayout()
     top_layout.addWidget(view_group, 2)
     top_layout.addWidget(lev_group, 1)
-
     lev_layout.addLayout(top_layout)
-
     lev_layout.addWidget(window.tilt_canvas)
 
-    
     # Export Button
     window.export_btn = QPushButton("Export Tilt Data")
     window.export_btn.setObjectName("exportButton")
@@ -278,46 +243,44 @@ def setup_ui(window):
     lev_layout.addWidget(window.export_btn)
 
     lev_layout.addStretch()
-    tabs.addTab(lev_tab, "Levelling")  
-  
+    tabs.addTab(lev_tab, "Levelling")
 
     # Settings tab
     setup_tab = QWidget()
     setup_layout = QVBoxLayout(setup_tab)
 
-    # Wrap fields in a titled group box
     specs_group = QGroupBox("Stepper Motor Specifications")
     specs_form = QFormLayout(specs_group)
     setup_layout.addWidget(specs_group)
 
-    # Preset positions 
+    # Preset positions
     preset_group = QGroupBox("Preset Positions")
     preset_layout = QGridLayout(preset_group)
 
     window.save_pos_1_btn = QPushButton("Save 1")
-    window.go_pos_1_btn = QPushButton("Go to 1")
+    window.go_pos_1_btn   = QPushButton("Go to 1")
     window.preset_1_label = QLabel("Not Set")
     preset_layout.addWidget(window.save_pos_1_btn, 0, 0)
-    preset_layout.addWidget(window.go_pos_1_btn, 0, 1)
+    preset_layout.addWidget(window.go_pos_1_btn,   0, 1)
     preset_layout.addWidget(window.preset_1_label, 0, 2)
 
     window.save_pos_2_btn = QPushButton("Save 2")
-    window.go_pos_2_btn = QPushButton("Go to 2")
+    window.go_pos_2_btn   = QPushButton("Go to 2")
     window.preset_2_label = QLabel("Not Set")
     preset_layout.addWidget(window.save_pos_2_btn, 1, 0)
-    preset_layout.addWidget(window.go_pos_2_btn, 1, 1)
+    preset_layout.addWidget(window.go_pos_2_btn,   1, 1)
     preset_layout.addWidget(window.preset_2_label, 1, 2)
 
     window.save_pos_3_btn = QPushButton("Save 3")
-    window.go_pos_3_btn = QPushButton("Go to 3")
+    window.go_pos_3_btn   = QPushButton("Go to 3")
     window.preset_3_label = QLabel("Not Set")
     preset_layout.addWidget(window.save_pos_3_btn, 2, 0)
-    preset_layout.addWidget(window.go_pos_3_btn, 2, 1)
+    preset_layout.addWidget(window.go_pos_3_btn,   2, 1)
     preset_layout.addWidget(window.preset_3_label, 2, 2)
 
     setup_layout.addWidget(preset_group)
 
-    # Create and add spinboxes in that group
+    # Motor specs controls
     window.lead_spin = QDoubleSpinBox()
     window.lead_spin.setRange(0.1, 100.0)
     window.lead_spin.setSingleStep(0.1)
@@ -335,58 +298,142 @@ def setup_ui(window):
     window.click_spin.setValue(window._click_mm)
     specs_form.addRow("Click distance (mm):", window.click_spin)
 
-    # 3) Your Apply button at the bottom, right‐aligned
     window.apply_settings_btn = QPushButton("Apply")
     setup_layout.addWidget(window.apply_settings_btn, alignment=Qt.AlignRight)
-
-    # 4) Stretch to push everything up
     setup_layout.addStretch()
-
-    # 5) Finally add this tab to the tab widget
     tabs.addTab(setup_tab, "Settings")
 
-    # --- Viscometer Data tab (compact, single graph with toggles) ---
+    # --- Viscometer Data tab (REDESIGNED) ---
     visco_tab = QWidget()
     visco_layout = QVBoxLayout(visco_tab)
-    visco_layout.setContentsMargins(8, 8, 8, 8)
-    visco_layout.setSpacing(8)
+    visco_layout.setContentsMargins(15, 15, 15, 15)
+    visco_layout.setSpacing(10)
 
-    # Top row: live readouts (compact)
-    top_row = QHBoxLayout()
-    top_row.setSpacing(12)
+    # Info box for live data
+    info_box = QFrame()
+    info_box.setObjectName("infoBox")
+    info_box.setFrameShape(QFrame.StyledPanel)
+    info_box.setStyleSheet("""
+        #infoBox {
+            background-color: rgba(45, 45, 45, 0.8);
+            border: 1px solid #444;
+            border-radius: 8px;
+        }
+    """)
+    info_layout = QHBoxLayout(info_box)
+    info_layout.setContentsMargins(15, 10, 15, 10)
+    info_layout.setSpacing(20)
+
     window.vp_vl_label   = QLabel("Viscosity: -- cP")
     window.vp_temp_label = QLabel("Temperature: -- °C")
     window.vp_rho_label  = QLabel("Density: -- kg/m³")
     for w in (window.vp_vl_label, window.vp_temp_label, window.vp_rho_label):
-        w.setStyleSheet("font-weight: 600;")
-    top_row.addWidget(window.vp_vl_label)
-    top_row.addWidget(window.vp_temp_label)
-    top_row.addWidget(window.vp_rho_label)
-    top_row.addStretch()
-    visco_layout.addLayout(top_row)
+        w.setStyleSheet("font-size: 11pt; font-weight: 600; color: #eee;")
+        info_layout.addWidget(w)
+    info_layout.addStretch()
+    visco_layout.addWidget(info_box)
 
-    # Second row: show/hide toggles
-    toggle_row = QHBoxLayout()
-    toggle_row.setSpacing(12)
+    # Toggles
     window.cb_v   = QCheckBox("Viscosity");   window.cb_v.setChecked(True)
     window.cb_t   = QCheckBox("Temperature"); window.cb_t.setChecked(True)
-    window.cb_rho = QCheckBox("Density");     window.cb_rho.setChecked(False)  # off by default
-    toggle_row.addWidget(window.cb_v)
-    toggle_row.addWidget(window.cb_t)
-    toggle_row.addWidget(window.cb_rho)
-    toggle_row.addStretch()
-    visco_layout.addLayout(toggle_row)
+    window.cb_rho = QCheckBox("Density");     window.cb_rho.setChecked(False)
 
-    # Matplotlib figure: one axis + right y-axis for temperature
-    window.visco_fig = Figure(figsize=(6, 3), tight_layout=True)
+    VISCOSITY_COLOR   = "#2ecc71"
+    TEMPERATURE_COLOR = "#3498db"
+    DENSITY_COLOR     = "#e67e22"
+
+    toggle_host = QFrame()
+    toggle_host.setObjectName("toggleHost")
+    toggle_host_layout = QHBoxLayout(toggle_host)
+    toggle_host_layout.setContentsMargins(12, 8, 12, 8)
+    toggle_host_layout.setSpacing(20)
+    toggle_host_layout.addWidget(window.cb_v)
+    toggle_host_layout.addWidget(window.cb_t)
+    toggle_host_layout.addWidget(window.cb_rho)
+    toggle_host_layout.addStretch()
+    visco_layout.addWidget(toggle_host)
+
+    base_toggle_qss = """
+    #toggleHost {
+        background-color: #2b2b2b;
+        border: 1px solid #3a3a3a;
+        border-radius: 10px;
+    }
+    #toggleHost QCheckBox {
+        spacing: 10px;
+        font-size: 11pt;
+        font-weight: 600;
+        color: #f0f0f0;
+    }
+    #toggleHost QCheckBox::indicator {
+        width: 46px;
+        height: 24px;
+        border-radius: 12px;
+        border: 1px solid #111;
+        background: #777;
+    }
+    #toggleHost QCheckBox::indicator:unchecked {
+        background: #777;
+    }
+    #toggleHost QCheckBox::indicator:disabled {
+        background: #666;
+        border-color: #444;
+    }
+    """
+    toggle_host.setStyleSheet(base_toggle_qss)
+
+    window.cb_v.setStyleSheet(f"""
+    QCheckBox::indicator:checked {{
+        background: {VISCOSITY_COLOR};
+        border: 1px solid #0a0a0a;
+    }}
+    """)
+    window.cb_t.setStyleSheet(f"""
+    QCheckBox::indicator:checked {{
+        background: {TEMPERATURE_COLOR};
+        border: 1px solid #0a0a0a;
+    }}
+    """)
+    window.cb_rho.setStyleSheet(f"""
+    QCheckBox::indicator:checked {{
+        background: {DENSITY_COLOR};
+        border: 1px solid #0a0a0a;
+    }}
+    """)
+
+    # Matplotlib figure (Viscometer)
+    try:
+        window.visco_fig = Figure(figsize=(6, 4), layout="constrained")  # mpl ≥3.6
+    except TypeError:
+        window.visco_fig = Figure(figsize=(6, 4))
+        window.visco_fig.set_constrained_layout(True)  # fallback for older mpl
     window.visco_canvas = FigureCanvas(window.visco_fig)
     window.visco_ax  = window.visco_fig.add_subplot(111)
-    window.visco_ax2 = window.visco_ax.twinx()
+    window.visco_ax2 = window.visco_ax.twinx()  # For temperature
 
-    window.visco_ax.set_xlabel("Time (s)")
-    window.visco_ax.set_ylabel("Viscosity / Density")
-    window.visco_ax2.set_ylabel("Temp (°C)")
-    window.visco_ax.grid(True, linestyle="--", linewidth=0.5)
+    def update_visco_legend():
+        h1, l1 = window.visco_ax.get_legend_handles_labels()
+        h2, l2 = window.visco_ax2.get_legend_handles_labels()
+
+        # If nothing is plotted yet, do nothing
+        if not (h1 or h2):
+            return
+
+        # Remove old legend if present
+        if getattr(window, "visco_legend", None):
+            window.visco_legend.remove()
+
+        # Legend outside on the right
+        window.visco_legend = window.visco_ax.legend(
+            h1 + h2, l1 + l2,
+            loc="upper left", bbox_to_anchor=(1.02, 1.0),
+            borderaxespad=0.0, frameon=True
+        )
+        window.visco_legend.set_draggable(True)
+        window.visco_canvas.draw_idle()
+
+    # Expose helper
+    window.update_visco_legend = update_visco_legend
 
     visco_layout.addWidget(window.visco_canvas)
     tabs.addTab(visco_tab, "Viscometer Data")
@@ -394,31 +441,17 @@ def setup_ui(window):
     # Ensure tabs are central widget
     window.setCentralWidget(tabs)
 
-    # — Button Width Matching — (uses window.dir_panel)
+    # — Button Width Matching —
     fm = QFontMetrics(window.cancel_btn.font())
     text_w = fm.horizontalAdvance(window.cancel_btn.text())
     base = text_w + 24 + 2
-    for w in (
-        window.estop_btn,
-        window.dunk_btn,
-        window.zero_btn,
-        window.calib_btn,
-        window.cancel_btn,
-        window.dir_panel
-    ):
+    for w in (window.estop_btn, window.dunk_btn, window.zero_btn, window.calib_btn, window.cancel_btn, window.dir_panel):
         w.setMinimumWidth(base)
     base_width = window.cancel_btn.sizeHint().width()
-    for w in (
-        window.estop_btn,
-        window.dunk_btn,
-        window.zero_btn,
-        window.calib_btn,
-        window.cancel_btn,
-        window.dir_panel
-    ):
+    for w in (window.estop_btn, window.dunk_btn, window.zero_btn, window.calib_btn, window.cancel_btn, window.dir_panel):
         w.setMinimumWidth(base_width)
 
-    # — Style Sheet — (identical to your original)
+    # — Style Sheet —
     window.setStyleSheet("""
     QGroupBox {
       font-weight: bold;
@@ -446,66 +479,24 @@ def setup_ui(window):
     QPushButton:pressed {
       background-color: #222;
     }
-    QPushButton#estopButton {
-      background-color: #c0392b;
+    QPushButton#estopButton { background-color: #c0392b; }
+    QPushButton#estopButton:hover { background-color: #992d22; }
+    QPushButton#dunkButton { background-color: #000; color: white; }
+    QPushButton#dunkButton:hover { background-color: #333; }
+    QPushButton#zeroButton { background-color: #27ae60; }
+    QPushButton#zeroButton:hover { background-color: #1e8449; }
+    QPushButton#calibButton { background-color: #3498db; }
+    QPushButton#calibButton:hover { background-color: #2980b9; }
+    QPushButton#upDownButton { background-color: #000; color: white; font: bold 16pt "Segoe UI"; }
+    QPushButton#upDownButton:hover { background-color: #222; }
+    QPushButton#cancelButton { background-color: #f39c12; }
+    QPushButton#cancelButton:hover { background-color: #e67e22; }
+    QPushButton#refreshButton, QPushButton#connectButton {
+      background-color: #ddd; color: black; border: 1px solid #aaa; font-weight: normal;
     }
-    QPushButton#estopButton:hover {
-      background-color: #992d22;
-    }
-    QPushButton#dunkButton {
-      background-color: #000;
-      color: white;
-    }
-    QPushButton#dunkButton:hover {
-      background-color: #333;
-    }
-    QPushButton#zeroButton {
-      background-color: #27ae60;
-    }
-    QPushButton#zeroButton:hover {
-      background-color: #1e8449;
-    }
-    QPushButton#calibButton {
-      background-color: #3498db;
-    }
-    QPushButton#calibButton:hover {
-      background-color: #2980b9;
-    }
-    QPushButton#upDownButton {
-      background-color: #000;
-      color: white;
-      font: bold 16pt "Segoe UI";
-    }
-    QPushButton#upDownButton:hover {
-      background-color: #222;
-    }
-    QPushButton#cancelButton {
-      background-color: #f39c12;
-    }
-    QPushButton#cancelButton:hover {
-      background-color: #e67e22;
-    }
-    QPushButton#refreshButton,
-    QPushButton#connectButton {
-      background-color: #ddd;
-      color: black;
-      border: 1px solid #aaa;
-      font-weight: normal;
-    }
-    QPushButton#refreshButton:hover,
-    QPushButton#connectButton:hover {
-      background-color: #ccc;
-    }
-    QPushButton#cmdSendButton {
-      background-color: #8e44ad;
-    }
-    QPushButton#cmdSendButton:hover {
-      background-color: #732d91;
-    }
-    QPushButton#settingsButton {
-      background-color: #888;
-    }
-    QPushButton#settingsButton:hover {
-      background-color: #aaa;                 
-    }
+    QPushButton#refreshButton:hover, QPushButton#connectButton:hover { background-color: #ccc; }
+    QPushButton#cmdSendButton { background-color: #8e44ad; }
+    QPushButton#cmdSendButton:hover { background-color: #732d91; }
+    QPushButton#settingsButton { background-color: #888; }
+    QPushButton#settingsButton:hover { background-color: #aaa; }
     """)

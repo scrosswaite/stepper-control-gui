@@ -147,13 +147,48 @@ class MainWindow(QMainWindow):
         self._visco_start = time.time()
         self._visco_max_points = 1200  # keep last ~20 min at 1 Hz
 
-        # Pre-create line objects on the axes created in the UI
-        # Left axis: viscosity + density; Right axis: temperature
-        self._line_v   = self.visco_ax.plot([], [], label="Viscosity (cP)", linewidth=2)[0]
-        self._line_rho = self.visco_ax.plot([], [], label="Density (kg/m³)", linestyle="--", linewidth=1.8)[0]
-        self._line_t   = self.visco_ax2.plot([], [], label="Temperature (°C)", linewidth=2)[0]
+        # ---- STYLING FOR VISCOMETER PLOT ----
+        # 1. Colors & Fonts (easy to customize here)
+        self.BG_COLOR = "#1e1e1e" # Dark gray background
+        self.TEXT_COLOR = "#d0d0d0" # Light gray text
+        self.GRID_COLOR = "#404040" # Muted grid lines
+        self.LINE_COLORS = {
+            'temp': '#3498db', # Blue for temperature
+            'visc': '#2ecc71', # Green for viscosity
+            'rho': '#e67e22' # Orange for density
+        }
+        self.AXIS_LABEL_FONT = {'fontsize': 12, 'fontweight': 'bold', 'color': self.TEXT_COLOR}
+        self.TITLE_FONT = {'fontsize': 14, 'fontweight': 'bold', 'color': self.TEXT_COLOR}
 
-        # Legend + toggles (connect ONCE)
+        # 2. Apply background colors
+        self.visco_fig.set_facecolor(self.BG_COLOR)
+        self.visco_ax.set_facecolor(self.BG_COLOR)
+        
+        # 3. Style spines (the plot border)
+        for spine in self.visco_ax.spines.values():
+            spine.set_edgecolor(self.GRID_COLOR)
+        self.visco_ax2.spines['right'].set_edgecolor(self.LINE_COLORS['temp'])
+        
+        # 4. Style ticks
+        self.visco_ax.tick_params(axis='x', colors=self.TEXT_COLOR)
+        self.visco_ax.tick_params(axis='y', colors=self.TEXT_COLOR)
+        self.visco_ax2.tick_params(axis='y', colors=self.LINE_COLORS['temp'])
+        
+        # 5. Pre-create line objects with new styles
+        self._line_v = self.visco_ax.plot([], [], 'o-', label="Viscosity (cP)", linewidth=2, markersize=4, color=self.LINE_COLORS['visc'])[0]
+        self._line_rho = self.visco_ax.plot([], [], 's--', label="Density (kg/m³)", linewidth=1.8, markersize=4, color=self.LINE_COLORS['rho'])[0]
+        self._line_t = self.visco_ax2.plot([], [], '^-', label="Temperature (°C)", linewidth=2, markersize=4, color=self.LINE_COLORS['temp'])[0]
+
+        # 6. Set axis labels and title with styled fonts
+        self.visco_ax.set_title("Live Viscometer Data", fontdict=self.TITLE_FONT)
+        self.visco_ax.set_xlabel("Time (s)", fontdict=self.AXIS_LABEL_FONT)
+        self.visco_ax.set_ylabel("Viscosity (cP) / Density (kg/m³)", fontdict=self.AXIS_LABEL_FONT)
+        self.visco_ax2.set_ylabel("Temperature (°C)", fontdict=self.AXIS_LABEL_FONT, rotation=270, labelpad=15)
+        
+        # 7. Style the grid
+        self.visco_ax.grid(True, which='major', linestyle=':', linewidth=0.5, color=self.GRID_COLOR)
+        
+        # 8. Legend + toggles (connect ONCE)
         self._legend = None
         self.cb_v.stateChanged.connect(lambda s: self._toggle_line(self._line_v,   s))
         self.cb_t.stateChanged.connect(lambda s: self._toggle_line(self._line_t,   s))
@@ -674,14 +709,14 @@ class MainWindow(QMainWindow):
         self.serial.send(b"SET_ZERO\n")
 
     def _on_visco_data(self, d: dict):
-        # Labels
+        # Update styled info box labels
         try:
-            self.vp_vl_label.setText(f"Viscosity: {d['vl']:.2f} cP")
-            self.vp_temp_label.setText(f"Temperature: {d['t']:.1f} °C")
+            self.vp_vl_label.setText(f"Viscosity: <span style='color:{self.LINE_COLORS['visc']};'>{d['vl']:.2f} cP</span>")
+            self.vp_temp_label.setText(f"Temperature: <span style='color:{self.LINE_COLORS['temp']};'>{d['t']:.1f} °C</span>")
             if d.get("rho") is not None:
-                self.vp_rho_label.setText(f"Density: {d['rho']:.1f} kg/m³")
+                self.vp_rho_label.setText(f"Density: <span style='color:{self.LINE_COLORS['rho']};'>{d['rho']:.1f} kg/m³</span>")
             else:
-                self.vp_rho_label.setText("Density: -- kg/m³")
+                self.vp_rho_label.setText(f"Density: <span style='color:{self.LINE_COLORS['rho']};'>-- kg/m³</span>")
         except Exception:
             pass
 
@@ -725,14 +760,17 @@ class MainWindow(QMainWindow):
 
 
     def _rebuild_legend(self):
-        lines = [l for l in (self._line_v, self._line_rho, self._line_t) if l.get_visible()]
-        labels = [l.get_label() for l in lines]
-        if getattr(self, "_legend", None):
-            self._legend.remove()
-        self._legend = self.visco_ax.legend(lines, labels, loc="upper right", frameon=True)
+        lines_visc = [l for l in (self._line_v, self._line_rho) if l.get_visible()]
+        lines_temp = [self._line_t] if self._line_t.get_visible() else []
+        
+        # Place legend outside the plot area
+        self.visco_ax.legend(lines_visc, [l.get_label() for l in lines_visc], loc='upper left', bbox_to_anchor=(1.05, 1),
+                             facecolor=self.BG_COLOR, edgecolor=self.GRID_COLOR, labelcolor=self.TEXT_COLOR)
+        self.visco_ax2.legend(lines_temp, [l.get_label() for l in lines_temp], loc='upper left', bbox_to_anchor=(1.05, 0.8),
+                              facecolor=self.BG_COLOR, edgecolor=self.GRID_COLOR, labelcolor=self.TEXT_COLOR)
+
 
     def _toggle_line(self, line, state):
         line.set_visible(bool(state))
         self._rebuild_legend()
         self.visco_canvas.draw_idle()
-
