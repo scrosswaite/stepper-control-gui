@@ -1,3 +1,18 @@
+import os
+import pyqtgraph.opengl as gl
+
+from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
+from matplotlib.figure import Figure
+
+from PyQt5.QtCore    import Qt
+from PyQt5.QtGui     import QFontMetrics, QPixmap
+from PyQt5.QtWidgets import (
+    QWidget, QGroupBox, QVBoxLayout, QHBoxLayout, QFormLayout,
+    QLabel, QComboBox, QLineEdit, QDoubleSpinBox, QSpinBox,
+    QPushButton, QSizePolicy, QGridLayout, QTabWidget, QProgressBar,
+    QTextEdit,QCheckBox, QFrame
+)
+
 def setup_ui(window):
     # ── Hydramotion Logo ──
     window.logo_label = QLabel()
@@ -500,3 +515,6 @@ def setup_ui(window):
     QPushButton#settingsButton { background-color: #888; }
     QPushButton#settingsButton:hover { background-color: #aaa; }
     """)
+
+
+
