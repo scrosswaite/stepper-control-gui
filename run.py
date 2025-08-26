@@ -87,7 +87,6 @@ def main():
 
     else:
         # --- GUI MODE ---
-        # This part is unchanged and will run your normal visual application.
         app = QApplication(sys.argv)
         window = MainWindow()
         window.resize(900, 600)
