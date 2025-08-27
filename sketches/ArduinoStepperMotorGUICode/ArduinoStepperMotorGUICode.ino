@@ -4,27 +4,41 @@
 #include <ezButton.h>
 #include <AccelStepper.h>
 
-// --- Motion Parameters (constants are fine as globals) ---
+// --- Motion Parameters ---
 const int  STEPS_PER_REV = 200;
 const int  STEPS_PER_MM  = STEPS_PER_REV / 2;   // 12mm lead screw
-const int  JOG_STEPS     = STEPS_PER_MM / 2;     // 0.5mm jog
-const long DUNK_STEPS    = 50L * STEPS_PER_MM;   // 50mm dunk
+const int  JOG_STEPS     = STEPS_PER_MM / 2;    // 0.5mm jog
+const long DUNK_STEPS    = 50L * STEPS_PER_MM;  // 50mm dunk
 
-// --- Pin Assignments for TB6600 ---
-const int STEP_PIN = 9;
-const int DIR_PIN  = 8;
-const int ENA_PIN  = 10;
+// --- Pin Assignments for TB6600 Drivers ---
+// Motor 1 (Original)
+const int STEP_PIN_1 = 9;
+const int DIR_PIN_1  = 8;
+const int ENA_PIN_1  = 10;
+
+// Motor 2
+const int STEP_PIN_2 = 11;
+const int DIR_PIN_2  = 12;
+const int ENA_PIN_2  = 13;
+
+// Motor 3 (New) 
+const int STEP_PIN_3 = 4;
+const int DIR_PIN_3  = 5;
+const int ENA_PIN_3  = 6;
+
 
 // --- Other Pin Assignments ---
 const int LIMIT1_PIN = 2;
 const int LIMIT2_PIN = 3;
 const int LED_MOVING_PIN = A3;
 
-const int BTN_FWD_PIN   = 4;
-const int BTN_REV_PIN   = 5;
-const int BTN_HOME_PIN  = 6;
+// --- Button Pins (Control Motor 1 by default) ---
+const int BTN_FWD_PIN   = A0;
+const int BTN_REV_PIN   = A1;
+const int BTN_HOME_PIN  = A2;
 const int BTN_DUNK_PIN  = 7;
-const int BTN_CALIB_PIN = 12;
+const int BTN_CALIB_PIN = A4;
+
 
 // =============================
 // Encapsulated Components
@@ -42,8 +56,8 @@ private:
   bool wasRunning = false;
   String serialInputBuffer;
 
-  void enableMotor()  { digitalWrite(enaPin, LOW); }   // TB6600: LOW = enable
-  void disableMotor() { digitalWrite(enaPin, HIGH); }
+  void enableMotor()  { if (enaPin > 0) digitalWrite(enaPin, LOW); } // TB6600: LOW = enable
+  void disableMotor() { if (enaPin > 0) digitalWrite(enaPin, HIGH); }
 
 public:
   StepperController(int stepPin, int dirPin, int enaPin_,
@@ -53,19 +67,22 @@ public:
       limit1Pin(limit1Pin_), limit2Pin(limit2Pin_) {}
 
   void begin() {
-    pinMode(enaPin, OUTPUT);
-    pinMode(ledPin, OUTPUT);
-    pinMode(limit1Pin, INPUT_PULLUP);
-    pinMode(limit2Pin, INPUT_PULLUP);
+    if (enaPin > 0) pinMode(enaPin, OUTPUT);
+    if (ledPin > 0) pinMode(ledPin, OUTPUT);
+    if (limit1Pin > 0) pinMode(limit1Pin, INPUT_PULLUP);
+    if (limit2Pin > 0) pinMode(limit2Pin, INPUT_PULLUP);
 
     // Stepper config
-    digitalWrite(enaPin, HIGH); // disabled initially
+    if (enaPin > 0) digitalWrite(enaPin, HIGH); // disabled initially
     stepper.setMaxSpeed(4000);
     stepper.setAcceleration(500);
-    stepper.setEnablePin(enaPin);
-    stepper.setPinsInverted(false, false, true); // invert enable (LOW=on)
+    if (enaPin > 0) {
+        stepper.setEnablePin(enaPin);
+        stepper.setPinsInverted(false, false, true); // invert enable (LOW=on)
+    }
 
-    digitalWrite(ledPin, LOW);
+
+    if (ledPin > 0) digitalWrite(ledPin, LOW);
   }
 
   // ----- High-level actions -----
@@ -80,6 +97,9 @@ public:
   bool isRunning() const        { return stepper.isRunning(); }
 
   // ----- Serial command handling (with internal buffer) -----
+  // Forward declaration of the global motors array
+  static void processCommand(String cmd);
+  
   void handleSerial() {
     while (Serial.available() > 0) {
       char c = (char)Serial.read();
@@ -92,61 +112,17 @@ public:
     }
   }
 
-  void processCommand(String cmd) {
-    cmd.trim();
-    if (cmd.length() == 0) return;
-
-    if (cmd.startsWith("MOVE ")) {
-      float deg = cmd.substring(5).toFloat();
-      long steps = lround((deg / 360.0f) * STEPS_PER_REV);
-      stepper.move(steps);
-
-    } else if (cmd == "HOME") {
-      stepper.moveTo(0);
-
-    } else if (cmd == "DUNK") {
-      stepper.move(-DUNK_STEPS);
-
-    } else if (cmd == "GET_POS") {
-      Serial.print("POS ");
-      Serial.println(stepper.currentPosition());
-
-    } else if (cmd == "STOP" || cmd == "CANCEL" || cmd == "ESTOP") {
-      stepper.stop();
-      Serial.println(cmd == "ESTOP" ? "ESTOP" : "STOPPING");
-
-    } else if (cmd == "HOLD ON") {
-      holdTorque = true;
-      enableMotor();
-      Serial.println("HOLD ON");
-
-    } else if (cmd == "HOLD OFF") {
-      holdTorque = false;
-      if (!stepper.isRunning()) {
-        disableMotor();
-      }
-      Serial.println("HOLD OFF");
-
-    } else if (cmd == "SET_ZERO") {
-      stepper.setCurrentPosition(0);
-      Serial.println("HOMED");
-      Serial.print("POS ");
-      Serial.println(stepper.currentPosition());
-    }
-  }
-
   // ----- Periodic update (call every loop) -----
   void update() {
     bool running = stepper.isRunning();
-
     // Transition: started
     if (!wasRunning && running) {
-      digitalWrite(ledPin, HIGH);
+      if (ledPin > 0) digitalWrite(ledPin, HIGH);
       enableMotor();
     }
 
     // While moving: handle limits
-    if (running) {
+    if (running && limit1Pin > 0 && limit2Pin > 0) {
       bool movingForward = stepper.distanceToGo() > 0;
       if ((movingForward && digitalRead(limit1Pin) == LOW) ||
           (!movingForward && digitalRead(limit2Pin) == LOW)) {
@@ -157,7 +133,7 @@ public:
 
     // Transition: stopped
     if (wasRunning && !running) {
-      digitalWrite(ledPin, LOW);
+      if (ledPin > 0) digitalWrite(ledPin, LOW);
       Serial.println("MOVED");
       Serial.print("POS ");
       Serial.println(stepper.currentPosition());
@@ -223,12 +199,6 @@ public:
     : btnFwd(fwd), btnRev(rev), btnHome(home), btnDunk(dunk), btnCalib(calib) {}
 
   void begin() {
-    pinMode(BTN_FWD_PIN,   INPUT_PULLUP);
-    pinMode(BTN_REV_PIN,   INPUT_PULLUP);
-    pinMode(BTN_HOME_PIN,  INPUT_PULLUP);
-    pinMode(BTN_DUNK_PIN,  INPUT_PULLUP);
-    pinMode(BTN_CALIB_PIN, INPUT_PULLUP);
-
     btnFwd.setDebounceTime(50);
     btnRev.setDebounceTime(50);
     btnHome.setDebounceTime(50);
@@ -236,6 +206,7 @@ public:
     btnCalib.setDebounceTime(50);
   }
 
+  // Update now takes a reference to the primary motor
   void update(StepperController &ctrl) {
     btnFwd.loop();
     btnRev.loop();
@@ -254,26 +225,117 @@ public:
 // =============================
 // Single application objects
 // =============================
-StepperController controller(STEP_PIN, DIR_PIN, ENA_PIN,
-                             LED_MOVING_PIN, LIMIT1_PIN, LIMIT2_PIN);
+
+StepperController motors[] = {
+  StepperController(STEP_PIN_1, DIR_PIN_1, ENA_PIN_1, LED_MOVING_PIN, LIMIT1_PIN, LIMIT2_PIN),
+  StepperController(STEP_PIN_2, DIR_PIN_2, ENA_PIN_2, -1, -1, -1), // -1 for unused LED/limit pins
+  StepperController(STEP_PIN_3, DIR_PIN_3, ENA_PIN_3, -1, -1, -1)  // -1 for unused LED/limit pins
+};
+const int NUM_MOTORS = sizeof(motors) / sizeof(motors[0]);
+
 TiltSensor tilt;
 ButtonPanel buttons(BTN_FWD_PIN, BTN_REV_PIN, BTN_HOME_PIN, BTN_DUNK_PIN, BTN_CALIB_PIN);
+
+// Process command is now a static member of StepperController to access the global motors array
+void StepperController::processCommand(String cmd) {
+  cmd.trim();
+  if (cmd.length() == 0) return;
+
+  // NEW: Command for specific motor control
+  if (cmd.startsWith("MOVE_M ")) {
+    // Expected format: "MOVE_M <motor_index> <value> <units>"
+    // e.g., "MOVE_M 1 -100 steps"
+    int first_space = cmd.indexOf(' ');
+    int second_space = cmd.indexOf(' ', first_space + 1);
+    int third_space = cmd.indexOf(' ', second_space + 1);
+    
+    if (first_space > 0 && second_space > 0 && third_space > 0) {
+      int motor_index = cmd.substring(first_space + 1, second_space).toInt();
+      float value = cmd.substring(second_space + 1, third_space).toFloat();
+      String units = cmd.substring(third_space + 1);
+      
+      long steps;
+      if (units.equalsIgnoreCase("mm")) {
+          steps = lround(value * STEPS_PER_MM);
+      } else { // assume steps
+          steps = lround(value);
+      }
+
+      if (motor_index >= 0 && motor_index < NUM_MOTORS) {
+          motors[motor_index].moveRelative(steps);
+      } else if (motor_index == NUM_MOTORS || motor_index == 3) { // 3 is sent from UI for "All"
+          for (int i = 0; i < NUM_MOTORS; i++) {
+              motors[i].moveRelative(steps);
+          }
+      }
+    }
+  } else if (cmd.startsWith("MOVE ")) { // ORIGINAL command, controls motor 0
+    float deg = cmd.substring(5).toFloat();
+    long steps = lround((deg / 360.0f) * STEPS_PER_REV);
+    motors[0].moveRelative(steps);
+
+  } else if (cmd == "HOME") { // Controls motor 0
+    motors[0].moveToZero();
+  } else if (cmd == "DUNK") { // Controls motor 0
+    motors[0].dunk();
+  } else if (cmd == "GET_POS") { // Gets position of motor 0
+    Serial.print("POS ");
+    Serial.println(motors[0].position());
+  } else if (cmd == "STOP" || cmd == "CANCEL" || cmd == "ESTOP") { // Stops ALL motors
+    for(int i = 0; i < NUM_MOTORS; i++) {
+        motors[i].stop();
+    }
+    Serial.println(cmd == "ESTOP" ? "ESTOP" : "STOPPING");
+
+  } else if (cmd == "HOLD ON") { // Engages ALL motors
+     for(int i = 0; i < NUM_MOTORS; i++) {
+        motors[i].holdTorque = true;
+        motors[i].enableMotor();
+    }
+    Serial.println("HOLD ON");
+
+  } else if (cmd == "HOLD OFF") { // Disengages ALL motors
+    for(int i = 0; i < NUM_MOTORS; i++) {
+        motors[i].holdTorque = false;
+        if (!motors[i].isRunning()) {
+            motors[i].disableMotor();
+        }
+    }
+    Serial.println("HOLD OFF");
+  } else if (cmd == "SET_ZERO") { // Sets zero for motor 0
+    motors[0].setZero();
+    Serial.println("HOMED"); // Maintain original response for UI
+    Serial.print("POS ");
+    Serial.println(motors[0].position());
+  }
+}
 
 // =============================
 // Arduino entry points
 // =============================
 void setup() {
   Serial.begin(9600);
-  Serial.println("Stepper ready (TB6600)");
+  Serial.println("Stepper ready (TB6600) - Multi-Motor");
 
-  controller.begin();
+  for (int i = 0; i < NUM_MOTORS; i++) {
+    motors[i].begin();
+  }
+  
   tilt.begin();
   buttons.begin();
 }
 
 void loop() {
-  buttons.update(controller);
-  controller.handleSerial();
-  controller.update();
+  // Buttons control the primary motor (motor 0)
+  buttons.update(motors[0]); 
+  
+  // Only need to handle serial once, as it will dispatch commands
+  motors[0].handleSerial(); 
+
+  // Update all motors
+  for (int i = 0; i < NUM_MOTORS; i++) {
+    motors[i].update();
+  }
+  
   tilt.update();
 }

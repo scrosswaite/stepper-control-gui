@@ -139,6 +139,8 @@ class MainWindow(QMainWindow):
         self.save_pos_3_btn.clicked.connect(lambda: self._save_preset_position("3"))
         self.go_pos_3_btn.clicked.connect(lambda: self._go_to_preset_position("3"))
 
+        self.send_motor_command_btn.clicked.connect(self._send_motor_command)
+
         # ---- Viscometer data buffers ----
         self._visco_times = []
         self._visco_vl = []
@@ -774,3 +776,35 @@ class MainWindow(QMainWindow):
         line.set_visible(bool(state))
         self._rebuild_legend()
         self.visco_canvas.draw_idle()
+
+
+    def _send_motor_command(self):
+        if not self._check_connection() or self.is_busy:
+            return
+
+        actuator = self.actuator_combo.currentText()
+        direction = self.motor_direction_combo.currentText()
+        distance = self.motor_distance_spin.value()
+        units = self.motor_unit_combo.currentText()
+
+        # Determine the target motor index (0-2 for individual, 3 for all)
+        if "Actuator 1" in actuator:
+            motor_index = 0
+        elif "Actuator 2" in actuator:
+            motor_index = 1
+        elif "Actuator 3" in actuator:
+            motor_index = 2
+        else: # All
+            motor_index = 3
+
+        # Determine the sign for the direction
+        sign = 1 if direction == "Forward" else -1
+        value = sign * distance
+
+        # Create the command string
+        # Format: "MOVE_M <motor_index> <value> <units>"
+        command = f"MOVE_M {motor_index} {value} {units}\n"
+
+        self._lock_ui(f"Moving {actuator}...")
+        self._log_message(command.strip(), "TX")
+        self.serial.send(command.encode())

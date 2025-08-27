@@ -13,6 +13,47 @@ from PyQt5.QtWidgets import (
     QTextEdit,QCheckBox, QFrame
 )
 
+# Define this function BEFORE setup_ui
+def setup_motor_control_tab(window):
+    motor_tab = QWidget()
+    motor_layout = QVBoxLayout(motor_tab)
+
+    # --- Actuator Selection ---
+    selection_group = QGroupBox("Actuator Selection")
+    selection_layout = QHBoxLayout(selection_group)
+    window.actuator_combo = QComboBox()
+    window.actuator_combo.addItems(["Actuator 1", "Actuator 2", "Actuator 3", "All Actuators"])
+    selection_layout.addWidget(QLabel("Select Actuator:"))
+    selection_layout.addWidget(window.actuator_combo)
+    motor_layout.addWidget(selection_group)
+
+    # --- Movement Controls ---
+    control_group = QGroupBox("Movement Controls")
+    control_layout = QFormLayout(control_group)
+
+    window.motor_direction_combo = QComboBox()
+    window.motor_direction_combo.addItems(["Forward", "Backward"])
+
+    window.motor_distance_spin = QDoubleSpinBox()
+    window.motor_distance_spin.setRange(0, 1000)
+    window.motor_distance_spin.setValue(10)
+
+    window.motor_unit_combo = QComboBox()
+    window.motor_unit_combo.addItems(["mm", "steps"])
+
+    window.send_motor_command_btn = QPushButton("Move")
+
+    control_layout.addRow("Direction:", window.motor_direction_combo)
+    control_layout.addRow("Distance:", window.motor_distance_spin)
+    control_layout.addRow("Units:", window.motor_unit_combo)
+    control_layout.addRow(window.send_motor_command_btn)
+    motor_layout.addWidget(control_group)
+
+    motor_layout.addStretch()
+
+    return motor_tab
+
+
 def setup_ui(window):
     # ── Hydramotion Logo ──
     window.logo_label = QLabel()
@@ -452,6 +493,10 @@ def setup_ui(window):
 
     visco_layout.addWidget(window.visco_canvas)
     tabs.addTab(visco_tab, "Viscometer Data")
+    
+    # --- Motor Control Tab ---
+    motor_control_tab = setup_motor_control_tab(window)
+    tabs.addTab(motor_control_tab, "Motor Control")
 
     # Ensure tabs are central widget
     window.setCentralWidget(tabs)
@@ -515,6 +560,3 @@ def setup_ui(window):
     QPushButton#settingsButton { background-color: #888; }
     QPushButton#settingsButton:hover { background-color: #aaa; }
     """)
-
-
-
