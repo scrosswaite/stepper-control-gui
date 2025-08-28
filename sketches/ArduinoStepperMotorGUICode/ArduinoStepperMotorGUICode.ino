@@ -177,7 +177,7 @@ class TiltSensor {
 private:
   MPU6050 mpu;
   unsigned long lastRead = 0;
-  const unsigned long periodMs = 100;
+  const unsigned long periodMs = 1000;
 
 public:
   void begin() {

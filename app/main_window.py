@@ -235,7 +235,7 @@ class MainWindow(QMainWindow):
         prefix = ">>" if direction == "TX" else "<<"
         log_entry = f"[{timestamp}] {prefix} {message}"
         self.command_log.append(log_entry)
-        self.command_log.verticalScrollBar().setValue(self.command_log.verticalScrollBar().maximum())
+        #self.command_log.verticalScrollBar().setValue(self.command_log.verticalScrollBar().maximum())
 
     def _lock_ui(self, message="Busy..."):
         self.is_busy = True
@@ -298,7 +298,7 @@ class MainWindow(QMainWindow):
             self._unlock_ui("Move complete.")
             return
 
-        if line in ("STOPPING", "STOPPED" "ESTOP"):
+        if line in ("STOPPING", "STOPPED", "ESTOP"):
             self._unlock_ui("Motion stopped.")
             return
 
@@ -811,7 +811,7 @@ class MainWindow(QMainWindow):
             motor_index = 3
 
         # Determine the sign for the direction
-        sign = 1 if direction == "Forward" else -1
+        sign = 1 if direction == "Up" else -1
         value = sign * distance
 
         # Create the command string
