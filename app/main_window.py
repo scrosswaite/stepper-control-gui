@@ -29,6 +29,7 @@ class MainWindow(QMainWindow):
         # -------------------------------
         self.config_manager = ConfigManager()
         self.is_busy = False
+        self.is_leveling = False
 
         # Motion / config defaults (overridden by _load_settings)
         self._lead_mm = 4.0
@@ -260,6 +261,12 @@ class MainWindow(QMainWindow):
     def _on_serial_data(self, line: str):
         self._log_message(line, "RX")
         line = line.strip()
+
+        if line == "LEVELING_OFF":
+            self.is_leveling = False
+            self.begin_lvl_btn.setText("Begin Leveling")
+            self._unlock_ui("Leveling stopped by Arduino.")
+            return
 
         if line == "HOMED":
             self._current_position = 0
@@ -826,5 +833,23 @@ class MainWindow(QMainWindow):
         command = f"CONFIG_SPEED {max_speed} {acceleration}\n"
 
         self._set_status("Updating speed settings...")
+        self._log_message(command.strip(), "TX")
+        self.serial.send(command.encode())
+
+    def _send_level(self):
+        if not self._check_connection():
+            return
+
+        self.is_leveling = not self.is_leveling # Toggle the state
+
+        if self.is_leveling:
+            command = "LEVEL_ON\n"
+            self._lock_ui("Auto-leveling active...")
+            self.begin_lvl_btn.setText("Stop Leveling")
+        else:
+            command = "LEVEL_OFF\n"
+            self._unlock_ui("Leveling stopped.")
+            self.begin_lvl_btn.setText("Begin Leveling")
+
         self._log_message(command.strip(), "TX")
         self.serial.send(command.encode())

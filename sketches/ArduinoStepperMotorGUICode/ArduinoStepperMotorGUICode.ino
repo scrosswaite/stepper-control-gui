@@ -39,6 +39,25 @@ const int BTN_HOME_PIN  = A2;
 const int BTN_DUNK_PIN  = 7;
 const int BTN_CALIB_PIN = A4;
 
+// ===================================
+// NEW: Auto-Levelling Configuration
+// ===================================
+// --- Tuning Parameters (ADJUST THESE) ---
+const float KP = 1; // Proportional Gain: Start low (e.g., 0.1) and increase slowly.
+const float LEVEL_DEAD_ZONE = 0.25; // Degrees: How close to 0 is "good enough".
+
+// --- Platform Geometry (in mm) ---
+const float M1_Y = 220.0;
+const float M2_X = 190.0;
+const float M23_Y = -110.0;
+
+// --- State Variables ---
+bool isLeveling = false;
+unsigned long lastLevelingTime = 0;
+const unsigned long LEVELING_INTERVAL_MS = 50; // Run leveling logic every 50ms
+
+// Forward declaration for use in StepperController class
+void computePitchRoll(float &pitch, float &roll);
 
 // =============================
 // Encapsulated Components
@@ -160,16 +179,6 @@ private:
   unsigned long lastRead = 0;
   const unsigned long periodMs = 100;
 
-  void computePitchRoll(float &pitch, float &roll) {
-    int16_t ax, ay, az;
-    mpu.getAcceleration(&ax, &ay, &az);
-    float fAx = ax / 16384.0f;
-    float fAy = ay / 16384.0f;
-    float fAz = az / 16384.0f;
-    pitch = atan2(fAy, sqrt(fAx * fAx + fAz * fAz)) * 180.0f / PI;
-    roll  = atan2(-fAx, fAz) * 180.0f / PI;
-  }
-
 public:
   void begin() {
     Wire.begin();
@@ -179,12 +188,23 @@ public:
     }
   }
 
+  // Make this a public member to be accessible by the leveling function
+  void getPitchRoll(float &pitch, float &roll) {
+      int16_t ax, ay, az;
+      mpu.getAcceleration(&ax, &ay, &az);
+      float fAx = ax / 16384.0f;
+      float fAy = ay / 16384.0f;
+      float fAz = az / 16384.0f;
+      pitch = atan2(fAy, sqrt(fAx * fAx + fAz * fAz)) * 180.0f / PI;
+      roll  = atan2(-fAx, fAz) * 180.0f / PI;
+  }
+
   void update() {
     unsigned long now = millis();
     if (now - lastRead >= periodMs) {
       lastRead = now;
       float pitch, roll;
-      computePitchRoll(pitch, roll);
+      getPitchRoll(pitch, roll);
       Serial.print("TILT ");
       Serial.print(pitch, 2);
       Serial.print(" ");
@@ -192,6 +212,7 @@ public:
     }
   }
 };
+
 
 class ButtonPanel {
 private:
@@ -243,10 +264,84 @@ const int NUM_MOTORS = sizeof(motors) / sizeof(motors[0]);
 TiltSensor tilt;
 ButtonPanel buttons(BTN_FWD_PIN, BTN_REV_PIN, BTN_HOME_PIN, BTN_DUNK_PIN, BTN_CALIB_PIN);
 
+// ===================================
+// NEW: Auto-Levelling Functions
+// ===================================
+void startLeveling() {
+  isLeveling = true;
+  Serial.println("LEVELING_ON");
+}
+
+void stopLeveling() {
+  isLeveling = false;
+  // Stop any corrective movements
+  for (int i = 0; i < NUM_MOTORS; i++) {
+    motors[i].stop();
+  }
+  Serial.println("LEVELING_OFF");
+}
+
+void updateLeveling() {
+  if (!isLeveling) return;
+
+  // Don't interfere with other moves and don't run too fast
+  unsigned long now = millis();
+  if (now - lastLevelingTime < LEVELING_INTERVAL_MS) return;
+  lastLevelingTime = now;
+
+  // Check if any motor is busy with a large command
+  for (int i = 0; i < NUM_MOTORS; i++) {
+    if (motors[i].isRunning()) return;
+  }
+
+  float currentPitch, currentRoll;
+  tilt.getPitchRoll(currentPitch, currentRoll);
+
+  // If we are within the dead zone, do nothing.
+  if (abs(currentPitch) < LEVEL_DEAD_ZONE && abs(currentRoll) < LEVEL_DEAD_ZONE) {
+    return;
+  }
+
+  // The "error" is the current angle, as we want to drive it to zero.
+  // We need to move in the OPPOSITE direction of the error.
+  float pitch_error_rad = -currentPitch * (PI / 180.0);
+  float roll_error_rad = -currentRoll * (PI / 180.0);
+
+  // Kinematic Equations: Calculate required height change (dh) in mm for each motor
+  float dh1 = M1_Y * pitch_error_rad;
+  float dh2 = (M2_X * roll_error_rad) + (M23_Y * pitch_error_rad);
+  float dh3 = (-M2_X * roll_error_rad) + (M23_Y * pitch_error_rad);
+
+  // Convert mm to steps and apply Proportional Gain
+  long steps1 = lround(dh1 * STEPS_PER_MM * KP);
+  long steps2 = lround(dh2 * STEPS_PER_MM * KP);
+  long steps3 = lround(dh3 * STEPS_PER_MM * KP);
+
+  // Command the motors to move by the calculated small amount
+  motors[0].moveRelative(steps1);
+  motors[1].moveRelative(steps2);
+  motors[2].moveRelative(steps3);
+}
+
+
 // Process command is now a static member of StepperController to access the global motors array
 void StepperController::processCommand(String cmd) {
   cmd.trim();
   if (cmd.length() == 0) return;
+
+    // --- NEW: Handle Leveling Commands First ---
+  if (cmd == "LEVEL_ON") {
+    startLeveling();
+    return; // Exit after handling command
+  } else if (cmd == "LEVEL_OFF") {
+    stopLeveling();
+    return; // Exit after handling command
+  }
+
+  // If a non-leveling command is received, stop leveling
+  if (isLeveling) {
+    stopLeveling();
+  }
 
   // --- NEW: Speed Configuration Command ---
   if (cmd.startsWith("CONFIG_SPEED ")) {
@@ -338,12 +433,10 @@ void StepperController::processCommand(String cmd) {
 // =============================
 void setup() {
   Serial.begin(9600);
-  Serial.println("Stepper ready (TB6600) - Multi-Motor");
-
+  Serial.println("Stepper ready (TB6600) - Multi-Motor with Leveling");
   for (int i = 0; i < NUM_MOTORS; i++) {
     motors[i].begin();
   }
-  
   tilt.begin();
   buttons.begin();
 }
@@ -352,13 +445,17 @@ void loop() {
   // Buttons control the primary motor (motor 0)
   buttons.update(motors[0]);
 
-  // Only need to handle serial once, as it will dispatch commands
+  // Handle incoming serial commands
   motors[0].handleSerial();
 
   // Update all motors
   for (int i = 0; i < NUM_MOTORS; i++) {
     motors[i].update();
   }
-  
+
+  // Update sensor readings for GUI
   tilt.update();
+
+  // NEW: Continuously run the leveling logic if active
+  updateLeveling();
 }
