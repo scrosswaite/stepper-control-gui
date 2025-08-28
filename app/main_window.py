@@ -6,7 +6,7 @@ from pyqtgraph.Qt import QtCore
 from collections import deque
 from datetime import datetime
 
-from PyQt5.QtWidgets import QMainWindow, QMessageBox, QDialog, QFileDialog, QLabel
+from PyQt5.QtWidgets import QMainWindow, QMessageBox, QDialog, QFileDialog, QLabel, QSlider
 from PyQt5.QtCore import Qt
 
 from app.ui.main_ui import setup_ui
@@ -140,6 +140,12 @@ class MainWindow(QMainWindow):
         self.go_pos_3_btn.clicked.connect(lambda: self._go_to_preset_position("3"))
 
         self.send_motor_command_btn.clicked.connect(self._send_motor_command)
+
+        # Speed Control Signals
+
+        self.apply_speed_btn.clicked.connect(self._send_speed_settings)
+        self.speed_slider.valueChanged.connect(self.max_speed_spin.setValue)
+        self.max_speed_spin.valueChanged.connect(self.speed_slider.setValue)
 
         # ---- Viscometer data buffers ----
         self._visco_times = []
@@ -806,5 +812,19 @@ class MainWindow(QMainWindow):
         command = f"MOVE_M {motor_index} {value} {units}\n"
 
         self._lock_ui(f"Moving {actuator}...")
+        self._log_message(command.strip(), "TX")
+        self.serial.send(command.encode())
+
+    def _send_speed_settings(self):
+        if not self._check_connection():
+            return
+            
+        max_speed = self.max_speed_spin.value()
+        acceleration = self.accel_spin.value()
+
+        # New command format: "CONFIG_SPEED <max_speed> <acceleration>"
+        command = f"CONFIG_SPEED {max_speed} {acceleration}\n"
+
+        self._set_status("Updating speed settings...")
         self._log_message(command.strip(), "TX")
         self.serial.send(command.encode())

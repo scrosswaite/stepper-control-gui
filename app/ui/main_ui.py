@@ -10,10 +10,9 @@ from PyQt5.QtWidgets import (
     QWidget, QGroupBox, QVBoxLayout, QHBoxLayout, QFormLayout,
     QLabel, QComboBox, QLineEdit, QDoubleSpinBox, QSpinBox,
     QPushButton, QSizePolicy, QGridLayout, QTabWidget, QProgressBar,
-    QTextEdit,QCheckBox, QFrame
+    QTextEdit,QCheckBox, QFrame, QSlider
 )
 
-# Define this function BEFORE setup_ui
 def setup_motor_control_tab(window):
     motor_tab = QWidget()
     motor_layout = QVBoxLayout(motor_tab)
@@ -32,7 +31,7 @@ def setup_motor_control_tab(window):
     control_layout = QFormLayout(control_group)
 
     window.motor_direction_combo = QComboBox()
-    window.motor_direction_combo.addItems(["Forward", "Backward"])
+    window.motor_direction_combo.addItems(["Up", "Down"])
 
     window.motor_distance_spin = QDoubleSpinBox()
     window.motor_distance_spin.setRange(0, 1000)
@@ -42,12 +41,45 @@ def setup_motor_control_tab(window):
     window.motor_unit_combo.addItems(["mm", "steps"])
 
     window.send_motor_command_btn = QPushButton("Move")
+    window.cancel_motor_command_btn = QPushButton("Cancel Command")
 
     control_layout.addRow("Direction:", window.motor_direction_combo)
     control_layout.addRow("Distance:", window.motor_distance_spin)
     control_layout.addRow("Units:", window.motor_unit_combo)
-    control_layout.addRow(window.send_motor_command_btn)
+    
+    button_layout = QHBoxLayout()
+    button_layout.addWidget(window.send_motor_command_btn)
+    button_layout.addWidget(window.cancel_motor_command_btn)
+    control_layout.addRow(button_layout)
+    
     motor_layout.addWidget(control_group)
+
+    # --- Speed Controls (NEW) ---
+    speed_group = QGroupBox("Speed Controls")
+    speed_layout = QFormLayout(speed_group)
+
+    window.max_speed_spin = QSpinBox()
+    window.max_speed_spin.setRange(100, 8000)
+    window.max_speed_spin.setValue(4000)
+    window.max_speed_spin.setSingleStep(100)
+
+    window.accel_spin = QSpinBox()
+    window.accel_spin.setRange(50, 2000)
+    window.accel_spin.setValue(500)
+    window.accel_spin.setSingleStep(50)
+
+    window.speed_slider = QSlider(Qt.Horizontal)
+    window.speed_slider.setRange(100, 8000)
+    window.speed_slider.setValue(4000)
+    
+    window.apply_speed_btn = QPushButton("Apply Speed Settings")
+
+    speed_layout.addRow("Max Speed (steps/s):", window.max_speed_spin)
+    speed_layout.addRow("Acceleration (steps/s²):", window.accel_spin)
+    speed_layout.addRow("Speed Slider:", window.speed_slider)
+    speed_layout.addRow(window.apply_speed_btn)
+    motor_layout.addWidget(speed_group)
+
 
     motor_layout.addStretch()
 

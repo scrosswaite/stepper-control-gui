@@ -6,7 +6,7 @@
 
 // --- Motion Parameters ---
 const int  STEPS_PER_REV = 200;
-const int  STEPS_PER_MM  = STEPS_PER_REV / 2;   // 12mm lead screw
+const int  STEPS_PER_MM  = STEPS_PER_REV / 2;   // 2mm lead screw
 const int  JOG_STEPS     = STEPS_PER_MM / 2;    // 0.5mm jog
 const long DUNK_STEPS    = 50L * STEPS_PER_MM;  // 50mm dunk
 
@@ -21,7 +21,7 @@ const int STEP_PIN_2 = 11;
 const int DIR_PIN_2  = 12;
 const int ENA_PIN_2  = 13;
 
-// Motor 3 (New) 
+// Motor 3 (New)
 const int STEP_PIN_3 = 4;
 const int DIR_PIN_3  = 5;
 const int ENA_PIN_3  = 6;
@@ -96,10 +96,16 @@ public:
   void setZero()                { stepper.setCurrentPosition(0); }
   bool isRunning() const        { return stepper.isRunning(); }
 
+  // ----- NEW: Speed control -----
+  void setSpeed(float maxSpeed, float acceleration) {
+    stepper.setMaxSpeed(maxSpeed);
+    stepper.setAcceleration(acceleration);
+  }
+
   // ----- Serial command handling (with internal buffer) -----
   // Forward declaration of the global motors array
   static void processCommand(String cmd);
-  
+
   void handleSerial() {
     while (Serial.available() > 0) {
       char c = (char)Serial.read();
@@ -115,6 +121,7 @@ public:
   // ----- Periodic update (call every loop) -----
   void update() {
     bool running = stepper.isRunning();
+
     // Transition: started
     if (!wasRunning && running) {
       if (ledPin > 0) digitalWrite(ledPin, HIGH);
@@ -241,14 +248,31 @@ void StepperController::processCommand(String cmd) {
   cmd.trim();
   if (cmd.length() == 0) return;
 
+  // --- NEW: Speed Configuration Command ---
+  if (cmd.startsWith("CONFIG_SPEED ")) {
+    int first_space = cmd.indexOf(' ');
+    int second_space = cmd.indexOf(' ', first_space + 1);
+
+    if (first_space > 0 && second_space > 0) {
+      float max_speed = cmd.substring(first_space + 1, second_space).toFloat();
+      float accel = cmd.substring(second_space + 1).toFloat();
+      
+      // Apply to all motors
+      for (int i = 0; i < NUM_MOTORS; i++) {
+        motors[i].setSpeed(max_speed, accel);
+      }
+      Serial.println("SPEED_CONFIG_OK");
+    }
+  }
+
   // NEW: Command for specific motor control
-  if (cmd.startsWith("MOVE_M ")) {
+  else if (cmd.startsWith("MOVE_M ")) {
     // Expected format: "MOVE_M <motor_index> <value> <units>"
     // e.g., "MOVE_M 1 -100 steps"
     int first_space = cmd.indexOf(' ');
     int second_space = cmd.indexOf(' ', first_space + 1);
     int third_space = cmd.indexOf(' ', second_space + 1);
-    
+
     if (first_space > 0 && second_space > 0 && third_space > 0) {
       int motor_index = cmd.substring(first_space + 1, second_space).toInt();
       float value = cmd.substring(second_space + 1, third_space).toFloat();
@@ -286,7 +310,6 @@ void StepperController::processCommand(String cmd) {
         motors[i].stop();
     }
     Serial.println(cmd == "ESTOP" ? "ESTOP" : "STOPPING");
-
   } else if (cmd == "HOLD ON") { // Engages ALL motors
      for(int i = 0; i < NUM_MOTORS; i++) {
         motors[i].holdTorque = true;
@@ -327,10 +350,10 @@ void setup() {
 
 void loop() {
   // Buttons control the primary motor (motor 0)
-  buttons.update(motors[0]); 
-  
+  buttons.update(motors[0]);
+
   // Only need to handle serial once, as it will dispatch commands
-  motors[0].handleSerial(); 
+  motors[0].handleSerial();
 
   // Update all motors
   for (int i = 0; i < NUM_MOTORS; i++) {
