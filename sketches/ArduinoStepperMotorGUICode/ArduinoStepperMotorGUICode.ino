@@ -58,6 +58,7 @@ const float M23_Y = -110.0;
 
 // --- State Variables ---
 bool isLeveling = false;
+bool levelingCompletedMessageSent = false;
 unsigned long lastLevelingTime = 0;
 const unsigned long LEVELING_INTERVAL_MS = 50; // Run leveling logic every 50ms
 
@@ -282,6 +283,7 @@ ButtonPanel buttons(BTN_FWD_PIN, BTN_REV_PIN, BTN_HOME_PIN, BTN_DUNK_PIN, BTN_CA
 // ===================================
 void startLeveling() {
   isLeveling = true;
+  levelingCompletedMessageSent = false;
   Serial.println("LEVELING_ON");
 }
 
@@ -297,12 +299,10 @@ void stopLeveling() {
 void updateLeveling() {
   if (!isLeveling) return;
 
-  // Don't interfere with other moves and don't run too fast
   unsigned long now = millis();
   if (now - lastLevelingTime < LEVELING_INTERVAL_MS) return;
   lastLevelingTime = now;
 
-  // Check if any motor is busy with a large command
   for (int i = 0; i < NUM_MOTORS; i++) {
     if (motors[i].isRunning()) return;
   }
@@ -310,13 +310,19 @@ void updateLeveling() {
   float currentPitch, currentRoll;
   tilt.getPitchRoll(currentPitch, currentRoll);
 
-  // If we are within the dead zone, do nothing.
+  // If we are within the dead zone, send completion message.
   if (abs(currentPitch) < LEVEL_DEAD_ZONE && abs(currentRoll) < LEVEL_DEAD_ZONE) {
-    return;
+    if (!levelingCompletedMessageSent) {
+      Serial.println("Levelling has been completed");
+      levelingCompletedMessageSent = true;
+    }
+    return; // Stay in leveling mode, but don't move motors
+  } else {
+    // If we move out of the dead zone, reset the message flag
+    levelingCompletedMessageSent = false;
   }
 
   // The "error" is the current angle, as we want to drive it to zero.
-  // We need to move in the OPPOSITE direction of the error.
   float pitch_error_rad = -currentPitch * (PI / 180.0);
   float roll_error_rad = -currentRoll * (PI / 180.0);
 
@@ -335,7 +341,6 @@ void updateLeveling() {
   motors[1].moveRelative(steps2);
   motors[2].moveRelative(steps3);
 }
-
 
 // Process command is now a static member of StepperController to access the global motors array
 void StepperController::processCommand(String cmd) {
