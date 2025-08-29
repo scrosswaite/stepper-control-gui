@@ -3,6 +3,11 @@
 #include <MPU6050.h>
 #include <ezButton.h>
 #include <AccelStepper.h>
+#include <EEPROM.h>
+
+// --- Global Offset Variables ---
+float pitch_offset = 0.0;
+float roll_offset = 0.0;
 
 // --- Motion Parameters ---
 const int  STEPS_PER_REV = 200;
@@ -40,11 +45,11 @@ const int BTN_DUNK_PIN  = 7;
 const int BTN_CALIB_PIN = A4;
 
 // ===================================
-// NEW: Auto-Levelling Configuration
+// Auto-Levelling Configuration
 // ===================================
 // --- Tuning Parameters (ADJUST THESE) ---
-const float KP = 1; // Proportional Gain: Start low (e.g., 0.1) and increase slowly.
-const float LEVEL_DEAD_ZONE = 0.25; // Degrees: How close to 0 is "good enough".
+const float KP = 1; // Proportional Gain
+const float LEVEL_DEAD_ZONE = 0.1; // Degrees
 
 // --- Platform Geometry (in mm) ---
 const float M1_Y = 220.0;
@@ -178,7 +183,6 @@ private:
   MPU6050 mpu;
   unsigned long lastRead = 0;
   const unsigned long periodMs = 1000;
-
 public:
   void begin() {
     Wire.begin();
@@ -188,15 +192,24 @@ public:
     }
   }
 
-  // Make this a public member to be accessible by the leveling function
-  void getPitchRoll(float &pitch, float &roll) {
+  // Gets the raw, uncorrected sensor data
+  void getRawPitchRoll(float &raw_pitch, float &raw_roll) {
       int16_t ax, ay, az;
       mpu.getAcceleration(&ax, &ay, &az);
       float fAx = ax / 16384.0f;
       float fAy = ay / 16384.0f;
       float fAz = az / 16384.0f;
-      pitch = atan2(fAy, sqrt(fAx * fAx + fAz * fAz)) * 180.0f / PI;
-      roll  = atan2(-fAx, fAz) * 180.0f / PI;
+      raw_pitch = atan2(fAy, sqrt(fAx * fAx + fAz * fAz)) * 180.0f / PI;
+      raw_roll  = atan2(-fAx, fAz) * 180.0f / PI;
+  }
+
+  // Gets the final, calibrated pitch and roll
+  void getPitchRoll(float &pitch, float &roll) {
+      float raw_pitch, raw_roll;
+      getRawPitchRoll(raw_pitch, raw_roll); // Get raw data first
+      // Apply the stored offsets
+      pitch = raw_pitch - pitch_offset;
+      roll = raw_roll - roll_offset;
   }
 
   void update() {
@@ -329,6 +342,22 @@ void StepperController::processCommand(String cmd) {
   cmd.trim();
   if (cmd.length() == 0) return;
 
+  //  CALIBRATION COMMAND
+  if (cmd == "CALIBRATE_ACCEL") {
+    Serial.println("Calibrating accelerometer... do not move the plate.");
+    float raw_p, raw_r;
+    tilt.getRawPitchRoll(raw_p, raw_r); // Get the current raw sensor reading
+    pitch_offset = raw_p;               // This reading is the new "zero"
+    roll_offset = raw_r;
+
+    // Save the new offsets to permanent memory
+    EEPROM.put(0, pitch_offset);
+    EEPROM.put(sizeof(float), roll_offset);
+
+    Serial.println("ACCEL_CALIBRATED");
+    return; // Exit after handling command
+  }
+
     // --- NEW: Handle Leveling Commands First ---
   if (cmd == "LEVEL_ON") {
     startLeveling();
@@ -360,7 +389,7 @@ void StepperController::processCommand(String cmd) {
     }
   }
 
-  // NEW: Command for specific motor control
+  // Command for specific motor control
   else if (cmd.startsWith("MOVE_M ")) {
     // Expected format: "MOVE_M <motor_index> <value> <units>"
     // e.g., "MOVE_M 1 -100 steps"
@@ -433,7 +462,17 @@ void StepperController::processCommand(String cmd) {
 // =============================
 void setup() {
   Serial.begin(9600);
-  Serial.println("Stepper ready (TB6600) - Multi-Motor with Leveling");
+
+  // Load accelerometer offsets from EEPROM
+  EEPROM.get(0, pitch_offset);
+  EEPROM.get(sizeof(float), roll_offset);
+
+  // If EEPROM has never been written, the values will be "NaN" (Not a Number).
+  // In that case, default them to 0.
+  if (isnan(pitch_offset)) pitch_offset = 0.0;
+  if (isnan(roll_offset)) roll_offset = 0.0;
+
+  Serial.println("Stepper ready (TB600) - Multi-Motor with Leveling");
   for (int i = 0; i < NUM_MOTORS; i++) {
     motors[i].begin();
   }
