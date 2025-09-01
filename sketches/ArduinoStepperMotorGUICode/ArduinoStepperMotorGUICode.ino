@@ -11,8 +11,8 @@
 // --- Motion Parameters ---
 const int  STEPS_PER_REV = 200;
 const int  STEPS_PER_MM  = STEPS_PER_REV / 2; // 2mm lead screw
-const int  JOG_STEPS     = STEPS_PER_MM / 2; // 0.5mm jog
-const long DUNK_STEPS    = 50L * STEPS_PER_MM; // 50mm dunk
+const int  JOG_STEPS     = STEPS_PER_MM / 2;    // 0.5mm jog
+const long DUNK_STEPS    = 50L * STEPS_PER_MM;  // 50mm dunk
 
 // --- Pin Assignments for TB6600 Drivers ---
 const int STEP_PIN_1 = 9;
@@ -38,23 +38,26 @@ const int BTN_CALIB_PIN = A4;
 // ===================================
 // Auto-Levelling Configuration
 // ===================================
-const float KP = 1;
-const float LEVEL_DEAD_ZONE = 0.1;
+// ***************************************************************
+// ** FIX #2: Increased Proportional Gain (KP) from 1.0 to 4.0 **
+// This makes the leveling response stronger to prevent rattling.
+// ***************************************************************
+const float KP = 4.0; 
+const float LEVEL_DEAD_ZONE = 0.1; // Degrees
 const float M1_Y = 220.0;
 const float M2_X = 190.0;
 const float M23_Y = -110.0;
 bool isLeveling = false;
 bool levelingCompletedMessageSent = false;
 unsigned long lastLevelingTime = 0;
-const unsigned long LEVELING_INTERVAL_MS = 50;
+
+const unsigned long LEVELING_INTERVAL_MS = 50; 
 
 // --- Timer variables for sending tilt data to GUI ---
 unsigned long lastTiltSendTime = 0;
-const unsigned long TILT_SEND_INTERVAL_MS = 1000; // Send data every 1 second
+const unsigned long TILT_SEND_INTERVAL_MS = 1000; 
 
-// =============================
-// Encapsulated Components
-// =============================
+// (The StepperController and ButtonPanel classes remain unchanged)
 class StepperController {
 private:
   AccelStepper stepper;
@@ -65,6 +68,7 @@ private:
   bool holdTorque = false;
   bool wasRunning = false;
   String serialInputBuffer;
+
   void enableMotor()  { if (enaPin > 0) digitalWrite(enaPin, LOW); }
   void disableMotor() { if (enaPin > 0) digitalWrite(enaPin, HIGH); }
 
@@ -187,8 +191,12 @@ public:
           mpu.dmpGetQuaternion(&q, fifoBuffer);
           mpu.dmpGetGravity(&gravity, &q);
           mpu.dmpGetYawPitchRoll(ypr, &q, &gravity);
-          pitch = ypr[1] * 180.0f / M_PI;
-          roll  = ypr[2] * 180.0f / M_PI;
+          // ****************************************************************
+          // ** FIX #1: Swapped Pitch and Roll to match sensor orientation **
+          // This aligns the software axes with the physical axes.
+          // ****************************************************************
+          roll  = ypr[1] * 180.0f / M_PI; // ypr[1] was pitch
+          pitch = ypr[2] * 180.0f / M_PI; // ypr[2] was roll
       }
   }
 };
@@ -243,8 +251,7 @@ void updateLeveling() {
   unsigned long now = millis();
   if (now - lastLevelingTime < LEVELING_INTERVAL_MS) return;
   lastLevelingTime = now;
-  for (int i = 0; i < NUM_MOTORS; i++) if (motors[i].isRunning()) return;
-
+  
   float currentPitch, currentRoll;
   tilt.getPitchRoll(currentPitch, currentRoll);
 
@@ -260,9 +267,11 @@ void updateLeveling() {
 
   float pitch_error_rad = -currentPitch * (PI / 180.0);
   float roll_error_rad = -currentRoll * (PI / 180.0);
+
   float dh1 = M1_Y * pitch_error_rad;
   float dh2 = (M2_X * roll_error_rad) + (M23_Y * pitch_error_rad);
-  float dh3 = (-M2_X * roll_error_rad) + (M23_Y * pitch_error_rad);
+  float dh3 = (M2_X * roll_error_rad) - (M23_Y * pitch_error_rad);
+
   motors[0].moveRelative(lround(dh1 * STEPS_PER_MM * KP));
   motors[1].moveRelative(lround(dh2 * STEPS_PER_MM * KP));
   motors[2].moveRelative(lround(dh3 * STEPS_PER_MM * KP));
@@ -271,6 +280,7 @@ void updateLeveling() {
 void StepperController::processCommand(String cmd) {
   cmd.trim();
   if (cmd.length() == 0) return;
+
   if (cmd == "CALIBRATE_ACCEL") {
     Serial.println("DMP uses pre-set offsets. Manual calibration command ignored.");
     return;
@@ -320,20 +330,11 @@ void setup() {
 }
 
 void loop() {
-  // === CORRECTED LOOP ORDER ===
-
-  // 1. First, always check for and process incoming commands from the GUI
   motors[0].handleSerial();
-
-  // 2. Update the button states
   buttons.update(motors[0]);
-
-  // 3. Run the engine for all motors
   for (int i = 0; i < NUM_MOTORS; i++) {
     motors[i].update();
   }
-
-  // 4. Send TILT data to GUI periodically (so it doesn't interfere with command listening)
   unsigned long now = millis();
   if (now - lastTiltSendTime >= TILT_SEND_INTERVAL_MS) {
     lastTiltSendTime = now;
@@ -344,7 +345,5 @@ void loop() {
     Serial.print(" ");
     Serial.println(currentRoll, 2);
   }
-
-  // 5. Run the auto-leveling logic
   updateLeveling();
 }

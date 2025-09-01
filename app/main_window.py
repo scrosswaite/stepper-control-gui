@@ -242,8 +242,9 @@ class MainWindow(QMainWindow):
         self._set_status(message)
         self.led_moving.on()
         self.led_ready.off()
+       
         for btn in (self.dunk_btn, self.zero_btn, self.calib_btn, self.up_btn, self.down_btn,
-                    self.connect_btn, self.begin_lvl_btn, self.settings_btn, self.apply_settings_btn):
+                    self.connect_btn, self.settings_btn, self.apply_settings_btn):
             btn.setEnabled(False)
 
     def _unlock_ui(self, message="Ready"):
@@ -251,9 +252,12 @@ class MainWindow(QMainWindow):
         self._set_status(message)
         self.led_moving.off()
         self.led_ready.on()
+        
         for btn in (self.dunk_btn, self.zero_btn, self.calib_btn, self.up_btn, self.down_btn,
-                    self.connect_btn, self.begin_lvl_btn, self.settings_btn, self.apply_settings_btn):
+                    self.connect_btn, self.settings_btn, self.apply_settings_btn):
             btn.setEnabled(True)
+
+
 
     # --------------------------------------------------------------------
     # Serial data handling
