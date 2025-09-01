@@ -267,6 +267,10 @@ class MainWindow(QMainWindow):
             self.begin_lvl_btn.setText("Begin Leveling")
             self._unlock_ui("Leveling stopped by Arduino.")
             return
+        
+        if line == "Levelling has been completed":
+            QMessageBox.information(self, "Leveling Complete", "The platform has been successfully leveled.")
+            return
 
         if line == "HOMED":
             self._current_position = 0
@@ -533,7 +537,7 @@ class MainWindow(QMainWindow):
                 QMessageBox.critical(self, "Connection Failed", "No serial port selected.")
                 return
             try:
-                self.serial.connect(port)
+                self.serial.connect(port, baud=115200)
                 self.connect_btn.setText("Disconnect")
                 self._set_status(f"Connected to {port}")
                 self.led_power.on()
