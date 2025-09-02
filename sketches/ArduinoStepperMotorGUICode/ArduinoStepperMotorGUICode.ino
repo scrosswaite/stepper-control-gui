@@ -47,22 +47,19 @@ const int BTN_CALIB_PIN = A4;
 // ===================================
 // Auto-Levelling Configuration
 // ===================================
-// --- Tuning Parameters (ADJUST THESE) ---
 const float KP = 1; // Proportional Gain
 const float LEVEL_DEAD_ZONE = 0.1; // Degrees
 
-// --- Platform Geometry (in mm) ---
 const float M1_Y = 220.0;
 const float M2_X = 190.0;
 const float M23_Y = -110.0;
 
-// --- State Variables ---
 bool isLeveling = false;
 bool levelingCompletedMessageSent = false;
 unsigned long lastLevelingTime = 0;
-const unsigned long LEVELING_INTERVAL_MS = 50; // Run leveling logic every 50ms
+const unsigned long LEVELING_INTERVAL_MS = 50;
 
-// Forward declaration for use in StepperController class
+// Forward declaration
 void computePitchRoll(float &pitch, float &roll);
 
 // =============================
@@ -77,19 +74,25 @@ private:
   const int limit1Pin;
   const int limit2Pin;
 
+  // --- NEW: Direction inversion flag ---
+  bool invertDir;
+
   bool holdTorque = false;
   bool wasRunning = false;
   String serialInputBuffer;
 
-  void enableMotor()  { if (enaPin > 0) digitalWrite(enaPin, LOW); } // TB6600: LOW = enable
+  void enableMotor()  { if (enaPin > 0) digitalWrite(enaPin, LOW); }
   void disableMotor() { if (enaPin > 0) digitalWrite(enaPin, HIGH); }
 
 public:
+  // --- UPDATED CONSTRUCTOR: added invertDir parameter ---
   StepperController(int stepPin, int dirPin, int enaPin_,
-                    int ledPin_, int limit1Pin_, int limit2Pin_)
+                    int ledPin_, int limit1Pin_, int limit2Pin_,
+                    bool invertDir_ = false)
     : stepper(AccelStepper::DRIVER, stepPin, dirPin),
       enaPin(enaPin_), ledPin(ledPin_),
-      limit1Pin(limit1Pin_), limit2Pin(limit2Pin_) {}
+      limit1Pin(limit1Pin_), limit2Pin(limit2Pin_),
+      invertDir(invertDir_) {}
 
   void begin() {
     if (enaPin > 0) pinMode(enaPin, OUTPUT);
@@ -97,17 +100,22 @@ public:
     if (limit1Pin > 0) pinMode(limit1Pin, INPUT_PULLUP);
     if (limit2Pin > 0) pinMode(limit2Pin, INPUT_PULLUP);
 
-    // Stepper config
     if (enaPin > 0) digitalWrite(enaPin, HIGH); // disabled initially
     stepper.setMaxSpeed(4000);
     stepper.setAcceleration(500);
     if (enaPin > 0) {
         stepper.setEnablePin(enaPin);
-        stepper.setPinsInverted(false, false, true); // invert enable (LOW=on)
+        // --- UPDATED: apply per-motor DIR inversion ---
+        stepper.setPinsInverted(invertDir, false, true);
     }
 
-
     if (ledPin > 0) digitalWrite(ledPin, LOW);
+  }
+
+  // ----- NEW: Runtime DIR inversion -----
+  void invertDirection(bool invert) {
+    invertDir = invert;
+    stepper.setPinsInverted(invertDir, false, true);
   }
 
   // ----- High-level actions -----
@@ -121,14 +129,13 @@ public:
   void setZero()                { stepper.setCurrentPosition(0); }
   bool isRunning() const        { return stepper.isRunning(); }
 
-  // ----- NEW: Speed control -----
+  // ----- Speed control -----
   void setSpeed(float maxSpeed, float acceleration) {
     stepper.setMaxSpeed(maxSpeed);
     stepper.setAcceleration(acceleration);
   }
 
-  // ----- Serial command handling (with internal buffer) -----
-  // Forward declaration of the global motors array
+  // ----- Serial command handling -----
   static void processCommand(String cmd);
 
   void handleSerial() {
@@ -143,17 +150,12 @@ public:
     }
   }
 
-  // ----- Periodic update (call every loop) -----
   void update() {
     bool running = stepper.isRunning();
-
-    // Transition: started
     if (!wasRunning && running) {
       if (ledPin > 0) digitalWrite(ledPin, HIGH);
       enableMotor();
     }
-
-    // While moving: handle limits
     if (running && limit1Pin > 0 && limit2Pin > 0) {
       bool movingForward = stepper.distanceToGo() > 0;
       if ((movingForward && digitalRead(limit1Pin) == LOW) ||
@@ -162,8 +164,6 @@ public:
         Serial.println("LIMIT");
       }
     }
-
-    // Transition: stopped
     if (wasRunning && !running) {
       if (ledPin > 0) digitalWrite(ledPin, LOW);
       Serial.println("MOVED");
@@ -173,11 +173,25 @@ public:
         disableMotor();
       }
     }
-
     wasRunning = running;
-    stepper.run(); // motor engine
+    stepper.run();
   }
 };
+
+// =============================
+// Single application objects
+// =============================
+
+// --- UPDATED: Added per-motor invertDir flag ---
+// Motor 1: normal direction
+// Motor 2: normal direction
+// Motor 3: inverted (can also flip at runtime now)
+StepperController motors[] = {
+  StepperController(STEP_PIN_1, DIR_PIN_1, ENA_PIN_1, LED_MOVING_PIN, LIMIT1_PIN, LIMIT2_PIN, false),
+  StepperController(STEP_PIN_2, DIR_PIN_2, ENA_PIN_2, -1, -1, -1, true),
+  StepperController(STEP_PIN_3, DIR_PIN_3, ENA_PIN_3, -1, -1, -1, true)
+};
+const int NUM_MOTORS = sizeof(motors) / sizeof(motors[0]);
 
 class TiltSensor {
 private:
@@ -193,7 +207,6 @@ public:
     }
   }
 
-  // Gets the raw, uncorrected sensor data
   void getRawPitchRoll(float &raw_pitch, float &raw_roll) {
       int16_t ax, ay, az;
       mpu.getAcceleration(&ax, &ay, &az);
@@ -204,13 +217,11 @@ public:
       raw_roll  = atan2(-fAx, fAz) * 180.0f / PI;
   }
 
-  // Gets the final, calibrated pitch and roll
   void getPitchRoll(float &pitch, float &roll) {
       float raw_pitch, raw_roll;
-      getRawPitchRoll(raw_pitch, raw_roll); // Get raw data first
-      // Apply the stored offsets
+      getRawPitchRoll(raw_pitch, raw_roll);
       pitch = raw_pitch - pitch_offset;
-      roll = raw_roll - roll_offset;
+      roll  = raw_roll - roll_offset;
   }
 
   void update() {
@@ -226,7 +237,6 @@ public:
     }
   }
 };
-
 
 class ButtonPanel {
 private:
@@ -248,7 +258,6 @@ public:
     btnCalib.setDebounceTime(50);
   }
 
-  // Update now takes a reference to the primary motor
   void update(StepperController &ctrl) {
     btnFwd.loop();
     btnRev.loop();
@@ -264,16 +273,6 @@ public:
   }
 };
 
-// =============================
-// Single application objects
-// =============================
-
-StepperController motors[] = {
-  StepperController(STEP_PIN_1, DIR_PIN_1, ENA_PIN_1, LED_MOVING_PIN, LIMIT1_PIN, LIMIT2_PIN),
-  StepperController(STEP_PIN_2, DIR_PIN_2, ENA_PIN_2, -1, -1, -1), // -1 for unused LED/limit pins
-  StepperController(STEP_PIN_3, DIR_PIN_3, ENA_PIN_3, -1, -1, -1)  // -1 for unused LED/limit pins
-};
-const int NUM_MOTORS = sizeof(motors) / sizeof(motors[0]);
 
 TiltSensor tilt;
 ButtonPanel buttons(BTN_FWD_PIN, BTN_REV_PIN, BTN_HOME_PIN, BTN_DUNK_PIN, BTN_CALIB_PIN);
