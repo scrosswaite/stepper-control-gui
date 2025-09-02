@@ -308,6 +308,8 @@ static bool  filtInit = false;
 // Hysteresis latch (NEW)
 static bool inDead = false;
 
+// in ArduinoStepperMotorGUICode.ino
+
 void updateLeveling() {
   if (!isLeveling) return;
 
@@ -315,45 +317,41 @@ void updateLeveling() {
   if (now - lastLevelingTime < LEVELING_INTERVAL_MS) return;
   lastLevelingTime = now;
 
-  // 1) Get fresh sensor data; if none, skip this tick
   float rawPitch = 0.0f, rawRoll = 0.0f;
   if (!tilt.readPitchRoll(rawPitch, rawRoll)) {
     return;
   }
 
-  // 2) Low-pass filter for smoother control
   if (!filtInit) {
     filtPitch = rawPitch;
-    filtRoll  = rawRoll;
-    filtInit  = true;
+    filtRoll = rawRoll;
+    filtInit = true;
   } else {
     filtPitch = ALPHA * rawPitch + (1.0f - ALPHA) * filtPitch;
-    filtRoll  = ALPHA * rawRoll  + (1.0f - ALPHA) * filtRoll;
+    filtRoll = ALPHA * rawRoll + (1.0f - ALPHA) * filtRoll;
   }
 
   float ap = fabs(filtPitch);
   float ar = fabs(filtRoll);
 
-  // 3) Hysteresis dead-zone
-  if (!inDead && ap < DEAD_IN_DEG && ar < DEAD_IN_DEG) {
-    inDead = true;
+  // ** START: CORRECTED LOGIC **
+  // If we are within the dead-zone, levelling is done. Stop and exit.
+  if (ap < DEAD_IN_DEG && ar < DEAD_IN_DEG) {
     if (!levelingCompletedMessageSent) {
       Serial.println("Levelling has been completed");
       levelingCompletedMessageSent = true;
+      stopLeveling();
     }
-    stopLeveling(); // send LEVELING_OFF so GUI unlocks consistently
     return;
   }
-  if (inDead && (ap > DEAD_OUT_DEG || ar > DEAD_OUT_DEG)) {
-    inDead = false; // leave dead-zone -> resume control
-  }
-  if (inDead) {
-    return; // remain idle inside dead-zone
-  }
 
-  // 4) Compute height deltas from filtered errors
+  // If we are here, it means we are outside the dead-zone and need to level.
+  // Reset the completion message flag in case we re-enter leveling.
+  levelingCompletedMessageSent = false;
+  // ** END: CORRECTED LOGIC **
+
   const float pitch_error_rad = -filtPitch * (PI / 180.0f);
-  const float roll_error_rad  = -filtRoll  * (PI / 180.0f);
+  const float roll_error_rad = -filtRoll * (PI / 180.0f);
 
   float dh1 = M1_Y * pitch_error_rad;
   float dh2 = (M2_X * roll_error_rad) + (M23_Y * pitch_error_rad);
@@ -363,16 +361,15 @@ void updateLeveling() {
   long s2 = lround(dh2 * STEPS_PER_MM * KP);
   long s3 = lround(dh3 * STEPS_PER_MM * KP);
 
-  // 5) Clamp per-tick increments (anti-accumulation)
   s1 = constrain(s1, -MAX_STEPS_PER_TICK, +MAX_STEPS_PER_TICK);
   s2 = constrain(s2, -MAX_STEPS_PER_TICK, +MAX_STEPS_PER_TICK);
   s3 = constrain(s3, -MAX_STEPS_PER_TICK, +MAX_STEPS_PER_TICK);
 
-  // 6) Skip adding if too much is already queued (optional guard)
   if (labs(motors[0].pending()) < MAX_PENDING_STEPS) motors[0].moveRelative(s1);
   if (labs(motors[1].pending()) < MAX_PENDING_STEPS) motors[1].moveRelative(s2);
   if (labs(motors[2].pending()) < MAX_PENDING_STEPS) motors[2].moveRelative(s3);
 }
+
 
 // ===================================
 // Command processing

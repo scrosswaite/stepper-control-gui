@@ -266,6 +266,50 @@ class MainWindow(QMainWindow):
         self._log_message(line, "RX")
         line = line.strip()
 
+        if line.startswith("TILT"):
+            data = line[4:].strip().split()
+            if len(data) >= 2:
+                try:
+                    pitch = float(data[0])
+                    roll  = float(data[1])
+                    yaw   = 0.0  # placeholder
+
+                    # Rotate body and axes
+                    for item in [self.accel_body, self.x_axis, self.y_axis, self.z_axis]:
+                        item.resetTransform()
+                        item.rotate(pitch, 1, 0, 0)
+                        item.rotate(roll,  0, 1, 0)
+
+                    # Update buffers and labels
+                    self._tilt_buffer_x.append(pitch)
+                    self._tilt_buffer_y.append(roll)
+                    self._tilt_buffer_z.append(yaw)
+                    avg_p = sum(self._tilt_buffer_x) / len(self._tilt_buffer_x)
+                    avg_r = sum(self._tilt_buffer_y) / len(self._tilt_buffer_y)
+                    avg_y = sum(self._tilt_buffer_z) / len(self._tilt_buffer_z)
+                    self.tilt_x_label.setText(f"{avg_p:.2f}")
+                    self.tilt_y_label.setText(f"{avg_r:.2f}")
+                    self.tilt_z_label.setText(f"{avg_y:.2f}")
+
+                    # excel stuff
+                    with open("tilt_data.csv", "w") as f:
+                        f.write(f"{avg_p:.2f},{avg_r:.2f},{avg_y:.2f}")
+
+                    # Update plots
+                    t = time.time() - self._plot_start
+                    self._times.append(t)
+                    self._tilt_xs.append(avg_p)
+                    self._tilt_ys.append(avg_r)
+                    self._tilt_zs.append(avg_y)
+                    self._all_times.append(t)
+                    self._all_tilt_xs.append(avg_p)
+                    self._all_tilt_ys.append(avg_r)
+                    self._all_tilt_zs.append(avg_y)
+                    self._refresh_tilt_plot()
+                except ValueError:
+                    pass
+            return
+
         if line == "LEVELING_OFF":
             self.is_leveling = False
             self.begin_lvl_btn.setText("Begin Leveling")
@@ -328,50 +372,6 @@ class MainWindow(QMainWindow):
 
         if line == "CALIBRATE":
             self._start_calibration_dialog()
-            return
-
-        if line.startswith("TILT"):
-            data = line[4:].strip().split()
-            if len(data) >= 2:
-                try:
-                    pitch = float(data[0])
-                    roll  = float(data[1])
-                    yaw   = 0.0  # placeholder
-
-                    # Rotate body and axes
-                    for item in [self.accel_body, self.x_axis, self.y_axis, self.z_axis]:
-                        item.resetTransform()
-                        item.rotate(pitch, 1, 0, 0)
-                        item.rotate(roll,  0, 1, 0)
-
-                    # Update buffers and labels
-                    self._tilt_buffer_x.append(pitch)
-                    self._tilt_buffer_y.append(roll)
-                    self._tilt_buffer_z.append(yaw)
-                    avg_p = sum(self._tilt_buffer_x) / len(self._tilt_buffer_x)
-                    avg_r = sum(self._tilt_buffer_y) / len(self._tilt_buffer_y)
-                    avg_y = sum(self._tilt_buffer_z) / len(self._tilt_buffer_z)
-                    self.tilt_x_label.setText(f"{avg_p:.2f}")
-                    self.tilt_y_label.setText(f"{avg_r:.2f}")
-                    self.tilt_z_label.setText(f"{avg_y:.2f}")
-
-                    # excel stuff
-                    with open("tilt_data.csv", "w") as f:
-                        f.write(f"{avg_p:.2f},{avg_r:.2f},{avg_y:.2f}")
-
-                    # Update plots
-                    t = time.time() - self._plot_start
-                    self._times.append(t)
-                    self._tilt_xs.append(avg_p)
-                    self._tilt_ys.append(avg_r)
-                    self._tilt_zs.append(avg_y)
-                    self._all_times.append(t)
-                    self._all_tilt_xs.append(avg_p)
-                    self._all_tilt_ys.append(avg_r)
-                    self._all_tilt_zs.append(avg_y)
-                    self._refresh_tilt_plot()
-                except ValueError:
-                    pass
             return
 
         if line.startswith("LIMIT"):
