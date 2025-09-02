@@ -242,8 +242,11 @@ class MainWindow(QMainWindow):
         self._set_status(message)
         self.led_moving.on()
         self.led_ready.off()
-        for btn in (self.dunk_btn, self.zero_btn, self.calib_btn, self.up_btn, self.down_btn,
-                    self.connect_btn, self.begin_lvl_btn, self.settings_btn, self.apply_settings_btn):
+        # DO NOT disable the Level button, so the user can stop levelling
+        for btn in (
+            self.dunk_btn, self.zero_btn, self.calib_btn, self.up_btn, self.down_btn,
+            self.connect_btn, self.settings_btn, self.apply_settings_btn
+        ):
             btn.setEnabled(False)
 
     def _unlock_ui(self, message="Ready"):
@@ -262,6 +265,16 @@ class MainWindow(QMainWindow):
         self._log_message(line, "RX")
         line = line.strip()
 
+        if line == "LEVELING_ON":
+            self.is_leveling = True
+            self.begin_lvl_btn.setText("Stop Leveling")
+            self._set_status("Auto-levelling active...")
+            return
+        
+        if line.lower().startswith("levelling has been completed"):
+            self._set_status("Auto-levelling: within dead-zone")
+            return
+
         if line == "LEVELING_OFF":
             self.is_leveling = False
             self.begin_lvl_btn.setText("Begin Leveling")
@@ -276,9 +289,19 @@ class MainWindow(QMainWindow):
 
         if line.startswith("POS"):
             parts = line.split()
-            if len(parts) >= 2:
-                try:
-                    steps = int(float(parts[1]))  # tolerate "123.0"
+            try:
+                if len(parts) == 2:
+                    # Backward-compat: "POS <steps>" -> assume motor 0
+                    steps = int(float(parts[1]))
+                    motor_idx = 0
+                elif len(parts) >= 3:
+                    # New format: "POS <motor_idx> <steps>"
+                    motor_idx = int(parts[1])
+                    steps = int(float(parts[2]))
+                else:
+                    return
+
+                if motor_idx == 0:
                     self._current_position = steps
 
                     # If we were saving a preset, store it now
@@ -289,8 +312,8 @@ class MainWindow(QMainWindow):
                         self._update_preset_labels()
                         self._save_settings()
                         self._set_status(f"Preset {slot} saved.")
-                except ValueError:
-                    pass
+            except ValueError:
+                pass
             return
 
         # Completed move (do not adjust position here; rely on POS)
@@ -331,9 +354,10 @@ class MainWindow(QMainWindow):
                     self.tilt_y_label.setText(f"{avg_r:.2f}")
                     self.tilt_z_label.setText(f"{avg_y:.2f}")
 
-                    # excel stuff
-                    with open("tilt_data.csv", "w") as f:
-                        f.write(f"{avg_p:.2f},{avg_r:.2f},{avg_y:.2f}")
+                    # Log a CSV row per sample (append)
+                    with open("tilt_data.csv", "a", newline="") as f:
+                        f.write(f"{avg_p:.2f},{avg_r:.2f},{avg_y:.2f}\n")
+
 
                     # Update plots
                     t = time.time() - self._plot_start
@@ -417,14 +441,6 @@ class MainWindow(QMainWindow):
             return
         self._lock_ui("Dunking...")
         command = "DUNK\n"
-        self._log_message(command.strip(), "TX")
-        self.serial.send(command.encode())
-
-    def _send_level(self):
-        if not self._check_connection() or self.is_busy:
-            return
-        self._lock_ui("Starting levelling...")
-        command = "LEVEL\n"
         self._log_message(command.strip(), "TX")
         self.serial.send(command.encode())
 
