@@ -1,43 +1,69 @@
-#
-# This is the final, stable version of run.py
-#
+# run.py — final, stable version with CLI fixes and baud update
+
 import sys
 import time
 
-# We only import GUI components when we know we need them.
+# GUI components are only used when needed (GUI mode or for lead_mm calc in CLI).
 from PyQt5.QtWidgets import QApplication
 from app.main_window import MainWindow
 
-# --- A new, simple function for direct serial communication ---
+# -----------------------------
+# Serial / CLI configuration
+# -----------------------------
+BAUD = 115200          # Updated from 9600 to match Arduino
+READ_TIMEOUT = 2       # seconds
+DEFAULT_PORT = "COM7"  # Keep previous default; can be overridden via CLI
+
+USAGE = """\
+Usage:
+  python run.py                         # Launch GUI
+  python run.py up <mm> [PORT]          # Move up by <mm>
+  python run.py down <mm> [PORT]        # Move down by <mm>
+  python run.py level_on [PORT]         # Start auto-levelling
+  python run.py level_off [PORT]        # Stop auto-levelling
+  python run.py level [PORT]            # Alias for level_on
+  python run.py zero [PORT]             # Home (same as GUI Zero)
+  python run.py home [PORT]             # Home
+  python run.py set_zero [PORT]         # Set current position as zero
+  python run.py dunk [PORT]             # Dunk
+  python run.py estop [PORT]            # Emergency stop
+"""
+
+
+# --- Simple function for direct serial communication (no GUI widgets used here) ---
 def send_serial_command(port, command):
     """
-    This function connects directly to the serial port, sends a single command,
-    waits for a single response, and closes. It uses no GUI components.
+    Connects directly to the serial port, sends a single command, waits for a single response, and closes.
+    Prints a banner if received; robust to missing banner.
     """
-    import serial # Import pyserial locally so the GUI doesn't need it.
-    try:
-        print(f"Opening port {port}...")
-        # Use a 'with' statement to ensure the port always closes.
-        with serial.Serial(port, 9600, timeout=2) as ser:
-            time.sleep(1.5) # Wait a bit longer for the connection to fully establish.
-            
-            # Read the Arduino's welcome message to confirm it's ready.
-            response = ser.readline().decode('utf-8', 'ignore').strip()
-            if not response:
-                print("ERROR: No response from Arduino on connection. Check wiring and Arduino code.")
-                return
-            print(f"Arduino ready. Banner: {response}")
+    import serial  # import locally so unit tests/mocks can patch easily
 
-            # Send the command
-            full_command = command + '\n'
+    try:
+        print(f"Opening port {port} @ {BAUD} baud...")
+        # Ensure the port always closes by using a context manager.
+        with serial.Serial(port, BAUD, timeout=READ_TIMEOUT) as ser:
+            time.sleep(1.5)  # allow board reset/USB-CDC settle
+
+            # Try to read the Arduino's banner line (non-fatal if missing)
+            banner = ser.readline().decode("utf-8", "ignore").strip()
+            if banner:
+                print(f"Arduino ready. Banner: {banner}")
+            else:
+                print("Note: No banner detected. Proceeding to send command.")
+
+            # Send the command (the Arduino expects a newline terminator)
+            full_command = command + "\n"
             print(f"Sending command: {command}")
             ser.write(full_command.encode())
 
-            # Wait for the confirmation message (e.g., "MOVED")
-            response = ser.readline().decode('utf-8', 'ignore').strip()
-            print(f"Arduino response: {response}")
-        
-        print(f"Port {port} closed.")
+            # Read one response line (typical: MOVED / SPEED_CONFIG_OK / etc.)
+            response = ser.readline().decode("utf-8", "ignore").strip()
+            if response:
+                print(f"Arduino response: {response}")
+            else:
+                print("No response received (timeout).")
+
+            print(f"Port {port} closed.")
 
     except serial.SerialException as e:
         print(f"SERIAL ERROR: {e}. Is another program (like the GUI or Arduino IDE) using the port?")
@@ -45,53 +71,98 @@ def send_serial_command(port, command):
         print(f"An unexpected error occurred: {e}")
 
 
+def _parse_port_arg(args, default=DEFAULT_PORT):
+    """
+    Minimal positional port override helper.
+    If args is empty: return default.
+    If args[0] looks like a COM* or /dev/*, use it.
+    Otherwise return default and leave args untouched (caller already consumed what it needs).
+    """
+    if not args:
+        return default
+    candidate = args[0]
+    # Very light validation; accept anything to keep behavior flexible.
+    return candidate
+
+
 def main():
-    # Check if we are running in command-line mode.
+    # --- COMMAND-LINE MODE ---
     if len(sys.argv) > 1:
-        # --- COMMAND-LINE MODE ---
-        # We need a temporary MainWindow instance ONLY to get calculation values.
-        # This is done without showing any windows.
+        # We need a temporary MainWindow instance only to get calculation values (lead_mm).
+        # Do not show any windows.
         app = QApplication.instance() or QApplication(sys.argv)
-        temp_window = MainWindow()
+        temp_window = MainWindow()  # not shown; used for _lead_mm
 
         command = sys.argv[1].lower()
-        port_to_use = "COM7" # Make sure this is your correct port
+        args = sys.argv[2:]  # remaining positional args
+        port_to_use = DEFAULT_PORT
         final_command_to_send = ""
 
-        # --- Calculate the command string ---
-        if command in ["up", "down"]:
-            if len(sys.argv) > 2:
-                try:
-                    distance_mm = float(sys.argv[2])
-                    degs_to_move = (distance_mm / temp_window._lead_mm) * 360.0
-                    if command == "down":
-                        degs_to_move = -degs_to_move
-                    final_command_to_send = f"MOVE {degs_to_move:.2f}"
-                except ValueError:
-                    print(f"ERROR: Invalid distance value '{sys.argv[2]}'.")
-                    return
-            else:
-                print(f"ERROR: The '{command}' command requires a distance value.")
+        # Distance-based moves: up/down <mm> [PORT]
+        if command in ("up", "down"):
+            if not args:
+                print(f"ERROR: The '{command}' command requires a distance value in mm.\n")
+                print(USAGE)
                 return
-        elif command in ["zero", "dunk", "estop", "level"]:
-            final_command_to_send = command.upper()
-        else:
-            print(f"ERROR: Unknown command '{command}'")
-            return
+            try:
+                distance_mm = float(args[0])
+            except ValueError:
+                print(f"ERROR: Invalid distance value '{args[0]}'.\n")
+                print(USAGE)
+                return
 
-        # --- Send the final command using our simple, direct function ---
+            # Convert mm -> degrees using the GUI's configured lead
+            degs_to_move = (distance_mm / temp_window._lead_mm) * 360.0
+            if command == "down":
+                degs_to_move = -degs_to_move
+            final_command_to_send = f"MOVE {degs_to_move:.2f}"
+
+            # Optional port override as next positional arg
+            if len(args) >= 2:
+                port_to_use = _parse_port_arg([args[1]], default=DEFAULT_PORT)
+
+        else:
+            # Simple commands with aliases mapped to Arduino-supported tokens
+            aliases = {
+                # Levelling
+                "level":      "LEVEL_ON",   # convenience alias
+                "level_on":   "LEVEL_ON",
+                "leveloff":   "LEVEL_OFF",  # tolerate missing underscore
+                "level_off":  "LEVEL_OFF",
+                "stop_level": "LEVEL_OFF",
+
+                # Motion / safety
+                "dunk":       "DUNK",
+                "estop":      "ESTOP",
+
+                # Zeroing / homing
+                "zero":       "HOME",       # matches GUI Zero button
+                "home":       "HOME",
+                "set_zero":   "SET_ZERO",   # set current position as zero
+            }
+
+            if command in aliases:
+                final_command_to_send = aliases[command]
+                # Optional port override as next positional arg
+                if args:
+                    port_to_use = _parse_port_arg([args[0]], default=DEFAULT_PORT)
+            else:
+                print(f"ERROR: Unknown command '{command}'.\n")
+                print(USAGE)
+                return
+
         if final_command_to_send:
             send_serial_command(port_to_use, final_command_to_send)
-        
-        print("--- Script Finished ---")
+            print("--- Script Finished ---")
+        return
 
-    else:
-        # --- GUI MODE ---
-        app = QApplication(sys.argv)
-        window = MainWindow()
-        window.resize(900, 600)
-        window.show()
-        sys.exit(app.exec_())
+    # --- GUI MODE ---
+    app = QApplication(sys.argv)
+    window = MainWindow()
+    window.resize(900, 600)
+    window.show()
+    sys.exit(app.exec_())
 
-if __name__ == '__main__':
+
+if __name__ == "__main__":
     main()

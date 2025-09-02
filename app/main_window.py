@@ -273,7 +273,23 @@ class MainWindow(QMainWindow):
             return
         
         if line == "Levelling has been completed":
-            QMessageBox.information(self, "Leveling Complete", "The platform has been successfully leveled.")
+            # 1) Bring the GUI back to idle
+            self.is_leveling = False
+            # Match your tab label spelling (“Levelling” in the UI)
+            self.begin_lvl_btn.setText("Begin Levelling")
+            self._unlock_ui("Level complete.")
+
+            # 2) (Optional but recommended) Ensure the Arduino exits levelling mode
+            #    In case firmware didn’t call stopLeveling(), request it now.
+            try:
+                self._log_message("LEVEL_OFF", "TX")
+                self.serial.send(b"LEVEL_OFF\n")
+            except Exception:
+                pass
+
+            # 3) User feedback
+            QMessageBox.information(self, "Levelling Complete",
+                                    "The platform has been successfully levelled.")
             return
 
         if line == "HOMED":
@@ -425,14 +441,6 @@ class MainWindow(QMainWindow):
             return
         self._lock_ui("Dunking...")
         command = "DUNK\n"
-        self._log_message(command.strip(), "TX")
-        self.serial.send(command.encode())
-
-    def _send_level(self):
-        if not self._check_connection() or self.is_busy:
-            return
-        self._lock_ui("Starting levelling...")
-        command = "LEVEL\n"
         self._log_message(command.strip(), "TX")
         self.serial.send(command.encode())
 
@@ -853,11 +861,11 @@ class MainWindow(QMainWindow):
         if self.is_leveling:
             command = "LEVEL_ON\n"
             self._lock_ui("Auto-leveling active...")
-            self.begin_lvl_btn.setText("Stop Leveling")
+            self.begin_lvl_btn.setText("Stop Levelling")
         else:
             command = "LEVEL_OFF\n"
             self._unlock_ui("Leveling stopped.")
-            self.begin_lvl_btn.setText("Begin Leveling")
+            self.begin_lvl_btn.setText("Begin Levelling")
 
         self._log_message(command.strip(), "TX")
         self.serial.send(command.encode())
