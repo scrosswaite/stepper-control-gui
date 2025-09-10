@@ -24,9 +24,6 @@ class MainWindow(QMainWindow):
         super().__init__()
         self.setWindowTitle("Stepper Control GUI")
 
-        # -------------------------------
-        # Core state & safe defaults (so setup_ui can read them)
-        # -------------------------------
         self.config_manager = ConfigManager()
         self.is_busy = False
         self.is_leveling = False
