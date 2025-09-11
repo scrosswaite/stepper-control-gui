@@ -56,23 +56,7 @@ class MainWindow(QMainWindow):
         self._csv_file_index = 1
         self._csv_file = None
         self._csv_writer = None
-        self._open_new_csv()
-
-        def _open_new_csv(self):
-            """Close current file and open a new rollover CSV."""
-            if self._csv_file:
-                self._csv_file.close()
-            fname = f"{self._csv_base}_{self._csv_file_index}.csv"
-            self._csv_file = open(fname, "w", newline="")
-            self._csv_writer = csv.writer(self._csv_file)
-            self._csv_writer.writerow(["Pitch", "Roll", "Yaw"])  # header row
-            self._csv_line_count = 0
-            self._csv_file_index += 1
-
-
-        # Open first CSV immediately
-        _open_new_csv()
-
+        self._open_new_csv()  # open first CSV immediately
 
         # Plotting buffers
         self._plot_start = time.time()
@@ -141,7 +125,6 @@ class MainWindow(QMainWindow):
         self.cancel_cmd_btn.clicked.connect(self._cancel_command)
         self.zero_cmd_btn.clicked.connect(self._set_zero_here)
 
-
         self.refresh_btn.clicked.connect(self.update_ports)
         self.connect_btn.clicked.connect(self._toggle_connection)
         self.estop_btn.clicked.connect(self._send_estop)
@@ -165,7 +148,6 @@ class MainWindow(QMainWindow):
         self.send_motor_command_btn.clicked.connect(self._send_motor_command)
 
         # Speed Control Signals
-
         self.apply_speed_btn.clicked.connect(self._send_speed_settings)
         self.speed_slider.valueChanged.connect(self.max_speed_spin.setValue)
         self.max_speed_spin.valueChanged.connect(self.speed_slider.setValue)
@@ -248,16 +230,29 @@ class MainWindow(QMainWindow):
             "Viscometer connected" if ok else "Viscometer disconnected"))
         self._visco_worker.start()
 
-
     # --------------------------------------------------------------------
     # Helpers / UI state
     # --------------------------------------------------------------------
+    def _open_new_csv(self):
+        """Close current file (if any) and open a new rollover CSV."""
+        try:
+            if self._csv_file:
+                self._csv_file.close()
+        except Exception:
+            pass
+        fname = f"{self._csv_base}_{self._csv_file_index}.csv"
+        self._csv_file = open(fname, "w", newline="")
+        self._csv_writer = csv.writer(self._csv_file)
+        self._csv_writer.writerow(["Pitch (deg)", "Roll (deg)", "Yaw (deg)"])  # header row
+        self._csv_line_count = 0
+        self._csv_file_index += 1
+
     def _log_message(self, message, direction="RX"):
         timestamp = datetime.now().strftime("%H:%M:%S.%f")[:-3]
         prefix = ">>" if direction == "TX" else "<<"
         log_entry = f"[{timestamp}] {prefix} {message}"
         self.command_log.append(log_entry)
-        #self.command_log.verticalScrollBar().setValue(self.command_log.verticalScrollBar().maximum())
+        # self.command_log.verticalScrollBar().setValue(self.command_log.verticalScrollBar().maximum())
 
     def _lock_ui(self, message="Busy..."):
         self.is_busy = True
@@ -382,9 +377,6 @@ class MainWindow(QMainWindow):
                     if self._csv_line_count >= self._csv_max_lines:
                         self._open_new_csv()
 
-
-
-
                     # Update plots
                     t = time.time() - self._plot_start
                     self._times.append(t)
@@ -419,7 +411,6 @@ class MainWindow(QMainWindow):
                 except ValueError:
                     pass
             return
-
 
         if any(line.upper().startswith(s) for s in ("CANCEL", "STOP", "ABORT")):
             self._unlock_ui("Command cancelled.")
@@ -561,19 +552,17 @@ class MainWindow(QMainWindow):
                     self._visco_worker.wait(1500)
             except Exception:
                 pass
-            super().closeEvent(event)
-            self._save_settings()
-            event.accept()
-        else:
-            event.ignore()
             # Close tilt CSV file safely
             try:
                 if self._csv_file:
                     self._csv_file.close()
             except Exception:
                 pass
-
-
+            super().closeEvent(event)
+            self._save_settings()
+            event.accept()
+        else:
+            event.ignore()
 
     # --------------------------------------------------------------------
     # Connection
@@ -837,7 +826,6 @@ class MainWindow(QMainWindow):
         self._rebuild_legend()
         self.visco_canvas.draw_idle()
 
-
     def _rebuild_legend(self):
         lines_visc = [l for l in (self._line_v, self._line_rho) if l.get_visible()]
         lines_temp = [self._line_t] if self._line_t.get_visible() else []
@@ -848,12 +836,10 @@ class MainWindow(QMainWindow):
         self.visco_ax2.legend(lines_temp, [l.get_label() for l in lines_temp], loc='upper left', bbox_to_anchor=(1.05, 0.8),
                               facecolor=self.BG_COLOR, edgecolor=self.GRID_COLOR, labelcolor=self.TEXT_COLOR)
 
-
     def _toggle_line(self, line, state):
         line.set_visible(bool(state))
         self._rebuild_legend()
         self.visco_canvas.draw_idle()
-
 
     def _send_motor_command(self):
         if not self._check_connection() or self.is_busy:
@@ -871,7 +857,7 @@ class MainWindow(QMainWindow):
             motor_index = 1
         elif "Actuator 3" in actuator:
             motor_index = 2
-        else: # All
+        else:  # All
             motor_index = 3
 
         # Determine the sign for the direction
@@ -904,7 +890,7 @@ class MainWindow(QMainWindow):
         if not self._check_connection():
             return
 
-        self.is_leveling = not self.is_leveling # Toggle the state
+        self.is_leveling = not self.is_leveling  # Toggle the state
 
         if self.is_leveling:
             command = "LEVEL_ON\n"
