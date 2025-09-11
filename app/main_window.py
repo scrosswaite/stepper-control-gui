@@ -49,6 +49,31 @@ class MainWindow(QMainWindow):
         self._tilt_buffer_y = deque(maxlen=self._tilt_buffer_len)
         self._tilt_buffer_z = deque(maxlen=self._tilt_buffer_len)
 
+        # --- CSV rollover setup ---
+        self._csv_base = "tilt_data"
+        self._csv_max_lines = 10000   # rollover after 10,000 rows
+        self._csv_line_count = 0
+        self._csv_file_index = 1
+        self._csv_file = None
+        self._csv_writer = None
+        self._open_new_csv()
+
+        def _open_new_csv(self):
+            """Close current file and open a new rollover CSV."""
+            if self._csv_file:
+                self._csv_file.close()
+            fname = f"{self._csv_base}_{self._csv_file_index}.csv"
+            self._csv_file = open(fname, "w", newline="")
+            self._csv_writer = csv.writer(self._csv_file)
+            self._csv_writer.writerow(["Pitch", "Roll", "Yaw"])  # header row
+            self._csv_line_count = 0
+            self._csv_file_index += 1
+
+
+        # Open first CSV immediately
+        _open_new_csv()
+
+
         # Plotting buffers
         self._plot_start = time.time()
         self._times, self._tilt_xs, self._tilt_ys = deque(maxlen=100), deque(maxlen=100), deque(maxlen=100)
@@ -351,9 +376,13 @@ class MainWindow(QMainWindow):
                     self.tilt_y_label.setText(f"{avg_r:.2f}")
                     self.tilt_z_label.setText(f"{avg_y:.2f}")
 
-                    # Log a CSV row per sample (append)
-                    with open("tilt_data.csv", "a", newline="") as f:
-                        f.write(f"{avg_p:.2f},{avg_r:.2f},{avg_y:.2f}\n")
+                    # Log a CSV row with rollover
+                    self._csv_writer.writerow([f"{avg_p:.2f}", f"{avg_r:.2f}", f"{avg_y:.2f}"])
+                    self._csv_line_count += 1
+                    if self._csv_line_count >= self._csv_max_lines:
+                        self._open_new_csv()
+
+
 
 
                     # Update plots
@@ -376,6 +405,21 @@ class MainWindow(QMainWindow):
             self._unlock_ui("Limit reached — stopped")
             self.led_error.on()
             return
+        
+        if line.startswith("CONFIG"):
+            parts = line.split()
+            if len(parts) >= 4:
+                try:
+                    self._lead_mm = float(parts[1])
+                    self._steps_per_rev = int(parts[2])
+                    self._click_mm = float(parts[3])
+                    self._click_deg = (self._click_mm / self._lead_mm) * 360.0
+                    self._update_settings_tab_fields()
+                    self._set_status("Config synced from Arduino.")
+                except ValueError:
+                    pass
+            return
+
 
         if any(line.upper().startswith(s) for s in ("CANCEL", "STOP", "ABORT")):
             self._unlock_ui("Command cancelled.")
@@ -522,6 +566,13 @@ class MainWindow(QMainWindow):
             event.accept()
         else:
             event.ignore()
+            # Close tilt CSV file safely
+            try:
+                if self._csv_file:
+                    self._csv_file.close()
+            except Exception:
+                pass
+
 
 
     # --------------------------------------------------------------------

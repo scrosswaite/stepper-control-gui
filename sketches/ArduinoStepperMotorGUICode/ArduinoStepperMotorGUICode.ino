@@ -4,6 +4,7 @@
 #include <ezButton.h>
 #include <AccelStepper.h>
 #include <EEPROM.h>
+#include <limits.h> 
 
 // ==============================
 // ----- User Configuration -----
@@ -34,6 +35,25 @@ const float K_V_MM_PER_RAD = 80.0f;                // velocity gain (mm/s per ra
 // Motor speed/accel limits (in steps/s)
 const float MAX_SPEED_STEPS = 3000.0f;             // must be <= setMaxSpeed()
 const float ACCEL_STEPS     = 2000.0f;             // ramp for AccelStepper
+
+// Defaults (keep your current constants too)
+const float LEAD_MM_DEFAULT   = LEAD_MM;            // reuse your existing LEAD_MM value
+const int   STEPS_PER_REV_DEF = STEPS_PER_REV;      // reuse your existing STEPS_PER_REV
+const float MAX_SPEED_STEPS_DEF = MAX_SPEED_STEPS;  // reuse current constant
+const float ACCEL_STEPS_DEF     = ACCEL_STEPS;      // reuse current constant
+
+// Runtime mechanics/speeds
+static float g_lead_mm       = LEAD_MM_DEFAULT;
+static int   g_steps_per_rev = STEPS_PER_REV_DEF;
+static float g_steps_per_mm  = (STEPS_PER_REV_DEF * MICROSTEPS) / LEAD_MM_DEFAULT;
+
+static float g_max_speed_steps = MAX_SPEED_STEPS_DEF;
+static float g_accel_steps     = ACCEL_STEPS_DEF;
+
+// helpers (replace JOG_STEPS / DUNK_STEPS macros that used STEPS_PER_MM)
+static long runtimeJogSteps()  { return lround(JOG_MM  * g_steps_per_mm); }
+static long runtimeDunkSteps() { return lround(DUNK_MM * g_steps_per_mm); }
+
 
 // ==============================
 // -------- Pin Assignments -----
@@ -71,9 +91,29 @@ const int BTN_CALIB_PIN = A4;
 float pitch_offset = 0.0f;
 float roll_offset  = 0.0f;
 
+const int EEPROM_ADDR_GBIAS_X = sizeof(float) * 2;
+const int EEPROM_ADDR_GBIAS_Y = sizeof(float) * 3;
+
 bool   isLeveling = false;
 bool   levelMsgSent = false;
 unsigned long lastLevelingTime = 0;
+
+// Dead-zone hysteresis & dwell
+const float LEVEL_DEAD_IN_DEG  = 0.10f;   // enter zone
+const float LEVEL_DEAD_OUT_DEG = 0.15f;   // leave zone
+const unsigned long DEAD_DWELL_MS = 300;  // ms before "completed" message
+
+bool deadIn = false;
+unsigned long deadEnterMs = 0;
+
+const float K_I_MM_PER_RADs = 5.0f;   // very small integral effect
+const float I_DECAY_PER_S    = 0.2f;  // leak (per second)
+const float I_MAX_RADs       = 0.1f;  // clamp integral magnitude
+
+float int_pitch = 0.0f, int_roll = 0.0f;
+
+bool imu_ok = true;
+
 
 // Forward decl
 void startLeveling();
@@ -88,6 +128,9 @@ class TiltSensor {
   uint32_t last_ts_ms = 0;
   // complementary filter state
   float p_deg = 0.0f, r_deg = 0.0f;
+  float gb_roll_dps = 0.0f;   // bias for gx (roll)
+  float gb_pitch_dps = 0.0f;  // bias for gy (pitch)
+
 
 public:
   void begin() {
@@ -99,11 +142,20 @@ public:
     mpu.setFullScaleGyroRange (MPU6050_GYRO_FS_250);
     mpu.setDLPFMode(4);                  // ~21 Hz; try 3..4
 
-    if (!mpu.testConnection()) {
-      Serial.println("MPU6050 connection failed!");
-    }
-    last_ts_ms = millis();
+  if (!mpu.testConnection()) {
+    Serial.println("MPU6050 connection failed!");
+    imu_ok = false;
+  } else {
+    imu_ok = true;
   }
+
+  EEPROM.get(EEPROM_ADDR_GBIAS_X, gb_roll_dps);
+  EEPROM.get(EEPROM_ADDR_GBIAS_Y, gb_pitch_dps);
+  if (isnan(gb_roll_dps))  gb_roll_dps  = 0.0f;
+  if (isnan(gb_pitch_dps)) gb_pitch_dps = 0.0f;
+
+  last_ts_ms = millis();
+}  
 
   // raw accel-only pitch/roll (deg) — used for calibration
   void getRawPitchRoll(float &raw_pitch, float &raw_roll) {
@@ -131,8 +183,8 @@ public:
     float aRoll  = atan2f(-(float)ax, (float)az) * 180.0f/PI;
 
     // gyro deg/s at 250 dps full-scale (131 LSB/deg/s)
-    float gRoll  =  gx / 131.0f;
-    float gPitch =  gy / 131.0f;
+    float gRoll  =  (gx / 131.0f) - gb_roll_dps;
+    float gPitch =  (gy / 131.0f) - gb_pitch_dps;
 
     // integrate gyro
     p_deg += gPitch * dt;
@@ -176,8 +228,12 @@ public:
   // leveling velocity command (steps/s) and accumulator
   float v_cmd = 0.0f;
   float stepAccum = 0.0f;
+  // soft travel limits
+  long softMin = LONG_MIN;  // default disabled
+  long softMax = LONG_MAX;
 
-private:
+
+public:
   bool wasRunning = false;
   String serialBuf;
 
@@ -232,6 +288,12 @@ public:
 
   void setLevelingVelocity(float v_steps_per_s) { v_cmd = v_steps_per_s; }
 
+  void setSoftLimits(long minSteps, long maxSteps) {
+    softMin = minSteps;
+    softMax = maxSteps;
+  }
+
+
   void handleSerial(); // declared below
 
   void update(int idx, float dt, bool levelingActive) {
@@ -249,6 +311,19 @@ public:
           (!movingForward && digitalRead(limit2Pin)==LOW)) {
         stepper.stop();
         Serial.print("LIMIT "); Serial.println(idx);
+      }
+    }
+
+        // --- Soft limits check ---
+    long pos = stepper.currentPosition();
+    if (running) {
+      if (pos >= softMax && stepper.distanceToGo() > 0) {
+        stepper.stop();
+        Serial.print("SOFT_LIMIT_MAX "); Serial.println(idx);
+      }
+      if (pos <= softMin && stepper.distanceToGo() < 0) {
+        stepper.stop();
+        Serial.print("SOFT_LIMIT_MIN "); Serial.println(idx);
       }
     }
 
@@ -319,12 +394,14 @@ public:
 // ------- Leveling logic -------
 // ==============================
 void startLeveling() {
+  if (!imu_ok) { Serial.println("LEVELLING_IMU_NOT_READY"); return; }
   isLeveling = true;
   levelMsgSent = false;
   for (int i=0;i<NUM_MOTORS;i++) {
-    if (motors[i].enaPin>0) digitalWrite(motors[i].enaPin, LOW);
-    motors[i].v_cmd = 0.0f;
-    motors[i].stepAccum = 0.0f;
+  motors[i].enableMotor();
+  motors[i].v_cmd = 0.0f;
+  motors[i].stepAccum = 0.0f;
+
   }
   lastLevelingTime = millis();
   Serial.println("LEVELING_ON");
@@ -336,6 +413,7 @@ void stopLeveling() {
     motors[i].v_cmd = 0.0f;
     motors[i].stepAccum = 0.0f;
     motors[i].stop();
+    if (!motors[i].holdTorque) motors[i].disableMotor();
   }
   Serial.println("LEVELING_OFF");
 }
@@ -352,32 +430,50 @@ void updateLeveling() {
   float pitch_deg, roll_deg;
   tilt.getPitchRoll(pitch_deg, roll_deg);
 
-  // dead-zone check
-  if (fabs(pitch_deg) < LEVEL_DEAD_ZONE_DEG && fabs(roll_deg) < LEVEL_DEAD_ZONE_DEG) {
-    if (!levelMsgSent) {
+  // --- Dead-zone with hysteresis and dwell ---
+  bool inside  = (fabs(pitch_deg) < LEVEL_DEAD_IN_DEG) && (fabs(roll_deg) < LEVEL_DEAD_IN_DEG);
+  bool outside = (fabs(pitch_deg) > LEVEL_DEAD_OUT_DEG) || (fabs(roll_deg) > LEVEL_DEAD_OUT_DEG);
+
+  if (!deadIn && inside) {
+    deadIn = true;
+    deadEnterMs = now;
+  } else if (deadIn && outside) {
+    deadIn = false;
+    levelMsgSent = false;
+  }
+
+  if (deadIn) {
+    // dwell before messaging; stop motion
+    if (!levelMsgSent && (now - deadEnterMs) > DEAD_DWELL_MS) {
       Serial.println("Levelling has been completed");
       levelMsgSent = true;
     }
     for (int i=0;i<NUM_MOTORS;i++) motors[i].setLevelingVelocity(0.0f);
     return;
-  } else {
-    levelMsgSent = false;
   }
+
 
   // errors (rad), signs chosen to drive toward zero
   const float pitch_e = -pitch_deg * (PI/180.0f);
   const float roll_e  = -roll_deg  * (PI/180.0f);
 
-  // small-angle linear kinematics: dh = y*pitch + x*roll
-  const float dh1 = M1_Y  * pitch_e;
-  const float dh2 = M23_Y * pitch_e +  M2_X * roll_e;
-  const float dh3 = M23_Y * pitch_e + (-M2_X)* roll_e;
+  // Integral with leak & clamp
+  auto clampf = [](float v, float lim){ return v>lim? lim : (v<-lim? -lim : v); };
+  int_pitch = clampf(int_pitch * (1.0f - I_DECAY_PER_S*dt) + pitch_e*dt, I_MAX_RADs);
+  int_roll  = clampf(int_roll  * (1.0f - I_DECAY_PER_S*dt) + roll_e *dt, I_MAX_RADs);
+
+  // small-angle linear kinematics: dh = y*pitch + x*roll (plus integral term scaled)
+  const float ki_scale = K_I_MM_PER_RADs / K_V_MM_PER_RAD;
+  const float dh1 = (M1_Y  * pitch_e)                 + (M1_Y  * int_pitch + 0.0f * int_roll) * ki_scale;
+  const float dh2 = (M23_Y * pitch_e +  M2_X * roll_e) + (M23_Y * int_pitch +  M2_X * int_roll) * ki_scale;
+  const float dh3 = (M23_Y * pitch_e + (-M2_X)*roll_e) + (M23_Y * int_pitch + (-M2_X)*int_roll) * ki_scale;
+
 
   // convert to step velocities
   auto clamp = [](float v, float lim){ return v>lim? lim : (v<-lim? -lim : v); };
-  float v1 = clamp(dh1 * K_V_MM_PER_RAD * STEPS_PER_MM, MAX_SPEED_STEPS);
-  float v2 = clamp(dh2 * K_V_MM_PER_RAD * STEPS_PER_MM, MAX_SPEED_STEPS);
-  float v3 = clamp(dh3 * K_V_MM_PER_RAD * STEPS_PER_MM, MAX_SPEED_STEPS);
+  float v1 = clamp(dh1 * K_V_MM_PER_RAD * STEPS_PER_MM, motors[0].stepper.maxSpeed());
+  float v2 = clamp(dh2 * K_V_MM_PER_RAD * STEPS_PER_MM, motors[1].stepper.maxSpeed());
+  float v3 = clamp(dh3 * K_V_MM_PER_RAD * STEPS_PER_MM, motors[2].stepper.maxSpeed());
 
   motors[0].setLevelingVelocity(v1);
   motors[1].setLevelingVelocity(v2);
@@ -426,6 +522,32 @@ void StepperController::handleSerial() {
         continue;
       }
 
+      if (cmd == "GET_CONFIG") {
+        Serial.print("CONFIG ");
+        Serial.print("LEAD_MM "); Serial.print(g_lead_mm); Serial.print(" ");
+        Serial.print("STEPS_PER_REV "); Serial.print(g_steps_per_rev); Serial.print(" ");
+        Serial.print("STEPS_PER_MM "); Serial.print(g_steps_per_mm); Serial.print(" ");
+        Serial.print("MAX_SPEED "); Serial.print(g_max_speed_steps); Serial.print(" ");
+        Serial.print("ACCEL "); Serial.println(g_accel_steps);
+        continue;
+      }
+
+
+            if (cmd.startsWith("SET_LIMITS ")) {
+        int s1 = cmd.indexOf(' '), s2 = cmd.indexOf(' ', s1+1), s3 = cmd.indexOf(' ', s2+1);
+        if (s1>0 && s2>0 && s3>0) {
+          int motor_index = cmd.substring(s1+1, s2).toInt();
+          long minS = cmd.substring(s2+1, s3).toInt();
+          long maxS = cmd.substring(s3+1).toInt();
+          if (motor_index >= 0 && motor_index < NUM_MOTORS) {
+            motors[motor_index].setSoftLimits(minS, maxS);
+            Serial.println("LIMITS_OK");
+          }
+        }
+        continue;
+      }
+
+
       if (cmd.startsWith("MOVE_M ")) {
         int s1=cmd.indexOf(' '), s2=cmd.indexOf(' ', s1+1), s3=cmd.indexOf(' ', s2+1);
         if (s1>0 && s2>0 && s3>0) {
@@ -467,11 +589,13 @@ void StepperController::handleSerial() {
         continue;
       }
       if (cmd == "HOLD ON") {
-        for (int i=0;i<NUM_MOTORS;i++){ motors[i].holdTorque=true; if (motors[i].enaPin>0) digitalWrite(motors[i].enaPin, LOW); }
+        for (int i=0;i<NUM_MOTORS;i++){ motors[i].holdTorque=true; motors[i].enableMotor();
+; }
         Serial.println("HOLD ON"); continue;
       }
       if (cmd == "HOLD OFF") {
-        for (int i=0;i<NUM_MOTORS;i++){ motors[i].holdTorque=false; if (!motors[i].isRunning() && motors[i].enaPin>0) digitalWrite(motors[i].enaPin, HIGH); }
+        for (int i=0;i<NUM_MOTORS;i++){ motors[i].holdTorque=false; if (!motors[i].isRunning()) motors[i].disableMotor();
+ }
         Serial.println("HOLD OFF"); continue;
       }
       if (cmd == "SET_ZERO") {
@@ -501,7 +625,10 @@ void setup() {
   pinMode(LED_MOVING_PIN, OUTPUT);
   digitalWrite(LED_MOVING_PIN, LOW);
 
-  for (int i=0;i<NUM_MOTORS;i++) motors[i].begin();
+  for (int i=0;i<NUM_MOTORS;i++) {
+    motors[i].begin();
+    motors[i].setSoftLimits(0, lround(150.0f * g_steps_per_mm));  // Example: 0–150 mm travel
+  }
   tilt.begin();
 
   Serial.println("Stepper ready (TB6600) - 3 Actuators with Auto-Leveling");
