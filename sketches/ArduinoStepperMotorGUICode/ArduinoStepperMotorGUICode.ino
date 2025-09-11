@@ -4,19 +4,17 @@
 #include <ezButton.h>
 #include <AccelStepper.h>
 #include <EEPROM.h>
-#include <limits.h> 
+#include <limits.h>
 
 // ==============================
 // ----- User Configuration -----
 // ==============================
-const float LEAD_MM        = 2.0f;   // screw lead (mm/rev)
-const int   MICROSTEPS     = 16;     // set to match TB6600 DIP switches
-const int   STEPS_PER_REV  = 200;    // full steps per rev
+const float LEAD_MM        = 2.0f;  // screw lead (mm/rev)
+const int   MICROSTEPS     = 8;     // set to match TB6600 DIP switches
+const int   STEPS_PER_REV  = 200;   // full steps per rev
 const float STEPS_PER_MM   = (STEPS_PER_REV * MICROSTEPS) / LEAD_MM;
-
 const float JOG_MM         = 0.5f;
 const float DUNK_MM        = 50.0f;
-
 const long  JOG_STEPS      = lround(JOG_MM  * STEPS_PER_MM);
 const long  DUNK_STEPS     = lround(DUNK_MM * STEPS_PER_MM);
 
@@ -28,32 +26,35 @@ const float M2_X  = 190.0f;
 const float M23_Y = -110.0f;
 
 // Leveling loop timing & control
-const unsigned long LEVELING_INTERVAL_MS = 25;     // control period (~40 Hz)
-const float LEVEL_DEAD_ZONE_DEG = 0.10f;           // stop band
-const float K_V_MM_PER_RAD = 80.0f;                // velocity gain (mm/s per rad)
+const unsigned long LEVELING_INTERVAL_MS = 20;       // ~50 Hz
+const float LEVEL_DEAD_IN_DEG  = 0.30f;              // widened enter band
+const float LEVEL_DEAD_OUT_DEG = 0.50f;              // widened leave band
+const float K_V_MM_PER_RAD     = 15.0f;              // gentler velocity gain
 
 // Motor speed/accel limits (in steps/s)
-const float MAX_SPEED_STEPS = 3000.0f;             // must be <= setMaxSpeed()
-const float ACCEL_STEPS     = 2000.0f;             // ramp for AccelStepper
+const float MAX_SPEED_STEPS = 3000.0f;               // must be <= setMaxSpeed()
+const float ACCEL_STEPS     = 5000.0f;               // higher accel for smoother ramps
+
+// Velocity command shaping
+const float DV_MAX = 3000.0f;   // steps/s^2 max slew rate for v_cmd
+const float V_MIN  = 300.0f;    // steps/s minimum useful speed (deadband)
 
 // Defaults (keep your current constants too)
-const float LEAD_MM_DEFAULT   = LEAD_MM;            // reuse your existing LEAD_MM value
-const int   STEPS_PER_REV_DEF = STEPS_PER_REV;      // reuse your existing STEPS_PER_REV
-const float MAX_SPEED_STEPS_DEF = MAX_SPEED_STEPS;  // reuse current constant
-const float ACCEL_STEPS_DEF     = ACCEL_STEPS;      // reuse current constant
+const float LEAD_MM_DEFAULT     = LEAD_MM;
+const int   STEPS_PER_REV_DEF   = STEPS_PER_REV;
+const float MAX_SPEED_STEPS_DEF = MAX_SPEED_STEPS;
+const float ACCEL_STEPS_DEF     = ACCEL_STEPS;
 
 // Runtime mechanics/speeds
-static float g_lead_mm       = LEAD_MM_DEFAULT;
-static int   g_steps_per_rev = STEPS_PER_REV_DEF;
-static float g_steps_per_mm  = (STEPS_PER_REV_DEF * MICROSTEPS) / LEAD_MM_DEFAULT;
-
+static float g_lead_mm         = LEAD_MM_DEFAULT;
+static int   g_steps_per_rev   = STEPS_PER_REV_DEF;
+static float g_steps_per_mm    = (STEPS_PER_REV_DEF * MICROSTEPS) / LEAD_MM_DEFAULT;
 static float g_max_speed_steps = MAX_SPEED_STEPS_DEF;
 static float g_accel_steps     = ACCEL_STEPS_DEF;
 
-// helpers (replace JOG_STEPS / DUNK_STEPS macros that used STEPS_PER_MM)
+// helpers (keep for completeness)
 static long runtimeJogSteps()  { return lround(JOG_MM  * g_steps_per_mm); }
 static long runtimeDunkSteps() { return lround(DUNK_MM * g_steps_per_mm); }
-
 
 // ==============================
 // -------- Pin Assignments -----
@@ -90,7 +91,6 @@ const int BTN_CALIB_PIN = A4;
 // ==============================
 float pitch_offset = 0.0f;
 float roll_offset  = 0.0f;
-
 const int EEPROM_ADDR_GBIAS_X = sizeof(float) * 2;
 const int EEPROM_ADDR_GBIAS_Y = sizeof(float) * 3;
 
@@ -99,21 +99,18 @@ bool   levelMsgSent = false;
 unsigned long lastLevelingTime = 0;
 
 // Dead-zone hysteresis & dwell
-const float LEVEL_DEAD_IN_DEG  = 0.10f;   // enter zone
-const float LEVEL_DEAD_OUT_DEG = 0.15f;   // leave zone
 const unsigned long DEAD_DWELL_MS = 300;  // ms before "completed" message
-
 bool deadIn = false;
 unsigned long deadEnterMs = 0;
 
-const float K_I_MM_PER_RADs = 5.0f;   // very small integral effect
-const float I_DECAY_PER_S    = 0.2f;  // leak (per second)
-const float I_MAX_RADs       = 0.1f;  // clamp integral magnitude
+// PI terms (I disabled for now via gain = 0)
+const float K_I_MM_PER_RADs = 0.0f; // integral OFF for stability-first tuning
+const float I_DECAY_PER_S    = 0.2f; // leak (kept; unused when Ki=0)
+const float I_MAX_RADs       = 0.1f; // clamp integral magnitude
 
 float int_pitch = 0.0f, int_roll = 0.0f;
 
 bool imu_ok = true;
-
 
 // Forward decl
 void startLeveling();
@@ -126,36 +123,49 @@ void updateLeveling();
 class TiltSensor {
   MPU6050 mpu;
   uint32_t last_ts_ms = 0;
-  // complementary filter state
-  float p_deg = 0.0f, r_deg = 0.0f;
-  float gb_roll_dps = 0.0f;   // bias for gx (roll)
-  float gb_pitch_dps = 0.0f;  // bias for gy (pitch)
 
+  float gb_roll_dps = 0.0f;  // bias for gx (roll)
+  float gb_pitch_dps = 0.0f; // bias for gy (pitch)
+
+  // --- Kalman filter tuning variables ---
+  float Q_angle = 0.001f;
+  float Q_bias = 0.003f;
+  float R_measure = 0.03f;
+
+  // --- Pitch State Variables ---
+  float angle_pitch = 0.0f;
+  float bias_pitch = 0.0f;
+  float P_pitch[2][2] = {{0, 0}, {0, 0}};
+
+  // --- Roll State Variables ---
+  float angle_roll = 0.0f;
+  float bias_roll = 0.0f;
+  float P_roll[2][2] = {{0, 0}, {0, 0}};
 
 public:
   void begin() {
     Wire.begin();
-    Wire.setClock(400000);                // Fast I2C
+    Wire.setClock(400000); // Fast I2C
     mpu.initialize();
     // ranges + low-pass filter
     mpu.setFullScaleAccelRange(MPU6050_ACCEL_FS_2);
     mpu.setFullScaleGyroRange (MPU6050_GYRO_FS_250);
-    mpu.setDLPFMode(4);                  // ~21 Hz; try 3..4
+    mpu.setDLPFMode(4); // ~21 Hz
 
-  if (!mpu.testConnection()) {
-    Serial.println("MPU6050 connection failed!");
-    imu_ok = false;
-  } else {
-    imu_ok = true;
+    if (!mpu.testConnection()) {
+      Serial.println("MPU6050 connection failed!");
+      imu_ok = false;
+    } else {
+      imu_ok = true;
+    }
+
+    EEPROM.get(EEPROM_ADDR_GBIAS_X, gb_roll_dps);
+    EEPROM.get(EEPROM_ADDR_GBIAS_Y, gb_pitch_dps);
+    if (isnan(gb_roll_dps))  gb_roll_dps  = 0.0f;
+    if (isnan(gb_pitch_dps)) gb_pitch_dps = 0.0f;
+
+    last_ts_ms = millis();
   }
-
-  EEPROM.get(EEPROM_ADDR_GBIAS_X, gb_roll_dps);
-  EEPROM.get(EEPROM_ADDR_GBIAS_Y, gb_pitch_dps);
-  if (isnan(gb_roll_dps))  gb_roll_dps  = 0.0f;
-  if (isnan(gb_pitch_dps)) gb_pitch_dps = 0.0f;
-
-  last_ts_ms = millis();
-}  
 
   // raw accel-only pitch/roll (deg) — used for calibration
   void getRawPitchRoll(float &raw_pitch, float &raw_roll) {
@@ -168,7 +178,7 @@ public:
     raw_roll  = atan2f(-fAx, fAz) * 180.0f/PI;
   }
 
-  // filtered pitch/roll (deg), gravity-referenced
+  // filtered pitch/roll (deg), gravity-referenced using Kalman Filter
   void getPitchRoll(float &pitch, float &roll) {
     uint32_t now = millis();
     float dt = (now - last_ts_ms) * 0.001f;
@@ -178,25 +188,93 @@ public:
     int16_t ax, ay, az, gx, gy, gz;
     mpu.getMotion6(&ax,&ay,&az,&gx,&gy,&gz);
 
-    // accel angles (deg)
-    float aPitch = atan2f((float)ay, sqrtf((float)ax*ax + (float)az*az)) * 180.0f/PI;
-    float aRoll  = atan2f(-(float)ax, (float)az) * 180.0f/PI;
+    // Calculate angles from accelerometer
+    float accel_angle_pitch = atan2f((float)ay, sqrtf((float)ax*ax + (float)az*az)) * 180.0f/PI;
+    float accel_angle_roll  = atan2f(-(float)ax, (float)az) * 180.0f/PI;
 
-    // gyro deg/s at 250 dps full-scale (131 LSB/deg/s)
-    float gRoll  =  (gx / 131.0f) - gb_roll_dps;
-    float gPitch =  (gy / 131.0f) - gb_pitch_dps;
+    // Gyro rates in deg/s
+    float gyro_rate_pitch = gy / 131.0f;
+    float gyro_rate_roll  = gx / 131.0f;
 
-    // integrate gyro
-    p_deg += gPitch * dt;
-    r_deg += gRoll  * dt;
+    // ======== PITCH AXIS KALMAN FILTER ========
+    {
+      // Predict
+      float rate = gyro_rate_pitch - bias_pitch;
+      angle_pitch += dt * rate;
+      // Covariance
+      P_pitch[0][0] += dt * (dt * P_pitch[1][1] - P_pitch[0][1] - P_pitch[1][0] + Q_angle);
+      P_pitch[0][1] -= dt * P_pitch[1][1];
+      P_pitch[1][0] -= dt * P_pitch[1][1];
+      P_pitch[1][1] += Q_bias * dt;
+      // Update
+      float S = P_pitch[0][0] + R_measure;
+      float K[2];
+      K[0] = P_pitch[0][0] / S;
+      K[1] = P_pitch[1][0] / S;
+      float y = accel_angle_pitch - angle_pitch;
+      angle_pitch += K[0] * y;
+      bias_pitch  += K[1] * y;
+      float P00_temp = P_pitch[0][0];
+      float P01_temp = P_pitch[0][1];
+      P_pitch[0][0] -= K[0] * P00_temp;
+      P_pitch[0][1] -= K[0] * P01_temp;
+      P_pitch[1][0] -= K[1] * P00_temp;
+      P_pitch[1][1] -= K[1] * P01_temp;
+    }
 
-    // complementary fuse
-    const float ALPHA = 0.98f;
-    p_deg = ALPHA * p_deg + (1.0f - ALPHA) * aPitch;
-    r_deg = ALPHA * r_deg + (1.0f - ALPHA) * aRoll;
+    // ======== ROLL AXIS KALMAN FILTER ========
+    {
+      // Predict
+      float rate = gyro_rate_roll - bias_roll;
+      angle_roll += dt * rate;
+      // Covariance
+      P_roll[0][0] += dt * (dt * P_roll[1][1] - P_roll[0][1] - P_roll[1][0] + Q_angle);
+      P_roll[0][1] -= dt * P_roll[1][1];
+      P_roll[1][0] -= dt * P_roll[1][1];
+      P_roll[1][1] += Q_bias * dt;
+      // Update
+      float S = P_roll[0][0] + R_measure;
+      float K[2];
+      K[0] = P_roll[0][0] / S;
+      K[1] = P_roll[1][0] / S;
+      float y = accel_angle_roll - angle_roll;
+      angle_roll += K[0] * y;
+      bias_roll  += K[1] * y;
+      float P00_temp = P_roll[0][0];
+      float P01_temp = P_roll[0][1];
+      P_roll[0][0] -= K[0] * P00_temp;
+      P_roll[0][1] -= K[0] * P01_temp;
+      P_roll[1][0] -= K[1] * P00_temp;
+      P_roll[1][1] -= K[1] * P01_temp;
+    }
 
-    pitch = p_deg - pitch_offset;
-    roll  = r_deg - roll_offset;
+    // Return the filtered values
+    pitch = angle_pitch - pitch_offset;
+    roll  = angle_roll - roll_offset;
+  }
+  
+  void calibrateGyro() {
+    const int num_samples = 1000;
+    float gx_sum = 0;
+    float gy_sum = 0;
+
+    Serial.println("Calibrating gyroscope... keep the sensor still.");
+
+    for (int i = 0; i < num_samples; i++) {
+      int16_t ax, ay, az, gx, gy, gz;
+      mpu.getMotion6(&ax, &ay, &az, &gx, &gy, &gz);
+      gx_sum += gx;
+      gy_sum += gy;
+      delay(2);
+    }
+
+    gb_roll_dps = (gx_sum / num_samples) / 131.0f;
+    gb_pitch_dps = (gy_sum / num_samples) / 131.0f;
+
+    EEPROM.put(EEPROM_ADDR_GBIAS_X, gb_roll_dps);
+    EEPROM.put(EEPROM_ADDR_GBIAS_Y, gb_pitch_dps);
+
+    Serial.println("Gyro calibration complete.");
   }
 
   // telemetry (only when idle)
@@ -225,19 +303,19 @@ public:
   bool invertDir;
   bool holdTorque = false;
 
-  // leveling velocity command (steps/s) and accumulator
+  // leveling velocity command (steps/s)
   float v_cmd = 0.0f;
-  float stepAccum = 0.0f;
+  float stepAccum = 0.0f; // fractional steps accumulator for the walking target
+
   // soft travel limits
   long softMin = LONG_MIN;  // default disabled
   long softMax = LONG_MAX;
-
 
 public:
   bool wasRunning = false;
   String serialBuf;
 
-  void enableMotor()  { if (enaPin > 0) digitalWrite(enaPin, LOW);  }
+  void enableMotor()  { if (enaPin > 0) digitalWrite(enaPin, LOW); }
   void disableMotor() { if (enaPin > 0) digitalWrite(enaPin, HIGH); }
 
 public:
@@ -258,6 +336,8 @@ public:
 
     stepper.setMaxSpeed(MAX_SPEED_STEPS);
     stepper.setAcceleration(ACCEL_STEPS);
+    stepper.setMinPulseWidth(5); // TB6600 robustness
+
     if (enaPin > 0) {
       stepper.setEnablePin(enaPin);
       stepper.setPinsInverted(invertDir, false, true); // DIR invert, STEP normal, EN active-low
@@ -293,53 +373,80 @@ public:
     softMax = maxSteps;
   }
 
-
   void handleSerial(); // declared below
 
   void update(int idx, float dt, bool levelingActive) {
-    bool running = stepper.isRunning();
+    // A "running" proxy that works in both modes
+    bool running_now = levelingActive ? (fabs(v_cmd) > 1.0f || stepper.isRunning())
+                                      : stepper.isRunning();
 
-    if (!wasRunning && running) {
+    // On start: LED + enable
+    if (!wasRunning && running_now) {
       if (ledPin > 0) digitalWrite(ledPin, HIGH);
       enableMotor();
     }
 
-    // limit switches
-    if (running && limit1Pin>0 && limit2Pin>0) {
-      bool movingForward = stepper.distanceToGo() > 0;
-      if ((movingForward && digitalRead(limit1Pin)==LOW) ||
-          (!movingForward && digitalRead(limit2Pin)==LOW)) {
-        stepper.stop();
-        Serial.print("LIMIT "); Serial.println(idx);
+    // ----- Limit switches -----
+    if (limit1Pin>0 && limit2Pin>0) {
+      if (!levelingActive && stepper.isRunning()) {
+        bool movingForward = stepper.distanceToGo() > 0;
+        if ((movingForward && digitalRead(limit1Pin)==LOW) ||
+            (!movingForward && digitalRead(limit2Pin)==LOW)) {
+          stepper.stop();
+          Serial.print("LIMIT "); Serial.println(idx);
+        }
       }
     }
 
-        // --- Soft limits check ---
+    // --- Soft limits check (position mode only here) ---
     long pos = stepper.currentPosition();
-    if (running) {
+    if (!levelingActive && stepper.isRunning()) {
       if (pos >= softMax && stepper.distanceToGo() > 0) {
-        stepper.stop();
-        Serial.print("SOFT_LIMIT_MAX "); Serial.println(idx);
+        stepper.stop(); Serial.print("SOFT_LIMIT_MAX "); Serial.println(idx);
       }
       if (pos <= softMin && stepper.distanceToGo() < 0) {
-        stepper.stop();
-        Serial.print("SOFT_LIMIT_MIN "); Serial.println(idx);
+        stepper.stop(); Serial.print("SOFT_LIMIT_MIN "); Serial.println(idx);
       }
     }
 
-    // Leveling: convert velocity to tiny position increments (uses accel limiting)
+    // ----- Motion service -----
     if (levelingActive) {
-      stepAccum += v_cmd * dt;                 // steps this tick
-      long inc = (long)stepAccum;
-      stepAccum -= inc;
-      if (inc != 0L) stepper.move(inc);
-      stepper.run();
+      // Walking target: advance by v_cmd*dt (with fractional accumulation)
+      stepAccum += v_cmd * dt;         // steps this tick (may be fractional)
+      long inc = (long)stepAccum;      // whole steps to command
+      stepAccum -= inc;                // keep remainder
+
+      // Hard stop at soft limits in speed/levelling mode
+      if ((pos >= softMax && inc > 0) || (pos <= softMin && inc < 0)) {
+        inc = 0;
+        v_cmd = 0.0f;
+        Serial.print("SOFT_LIMIT_"); Serial.println(pos >= softMax ? "MAX" : "MIN");
+      }
+
+      // Limit-switch safety in levelling (use direction of increment)
+      if (limit1Pin>0 && limit2Pin>0 && inc != 0) {
+        bool movingForward = inc > 0;
+        if ((movingForward && digitalRead(limit1Pin)==LOW) ||
+            (!movingForward && digitalRead(limit2Pin)==LOW)) {
+          inc = 0;
+          v_cmd = 0.0f;
+          Serial.print("LIMIT "); Serial.println(idx);
+        }
+      }
+
+      if (inc != 0) {
+        // Advance a persistent target; moveTo (not move) preserves velocity ramping
+        stepper.moveTo(stepper.targetPosition() + inc);
+      }
+      stepper.run(); // respects acceleration
     } else {
-      stepper.run();
+      stepper.run(); // position moves (with acceleration)
     }
 
-    // on stop
-    if (wasRunning && !stepper.isRunning()) {
+    // On stop
+    bool running_after = levelingActive ? (fabs(v_cmd) > 1.0f || stepper.isRunning())
+                                        : stepper.isRunning();
+    if (wasRunning && !running_after) {
       if (ledPin > 0) digitalWrite(ledPin, LOW);
       Serial.print("MOVED "); Serial.println(idx);
       Serial.print("POS ");   Serial.print(idx); Serial.print(" ");
@@ -347,7 +454,7 @@ public:
       if (!holdTorque) disableMotor();
     }
 
-    wasRunning = stepper.isRunning();
+    wasRunning = running_after;
   }
 
   friend void startLeveling();
@@ -398,10 +505,9 @@ void startLeveling() {
   isLeveling = true;
   levelMsgSent = false;
   for (int i=0;i<NUM_MOTORS;i++) {
-  motors[i].enableMotor();
-  motors[i].v_cmd = 0.0f;
-  motors[i].stepAccum = 0.0f;
-
+    motors[i].enableMotor();
+    motors[i].v_cmd = 0.0f;
+    motors[i].stepAccum = 0.0f;
   }
   lastLevelingTime = millis();
   Serial.println("LEVELING_ON");
@@ -424,11 +530,24 @@ void updateLeveling() {
   unsigned long now = millis();
   if (now - lastLevelingTime < LEVELING_INTERVAL_MS) return;
   float dt = (now - lastLevelingTime) * 0.001f;
+  if (dt <= 0) dt = 0.001f;
   lastLevelingTime = now;
 
   // read tilt
   float pitch_deg, roll_deg;
   tilt.getPitchRoll(pitch_deg, roll_deg);
+
+  // ---- extra smoothing on KF output (small LPF to tame chatter) ----
+  static bool pr_init = false;
+  static float p_f = 0.0f, r_f = 0.0f;
+  const float beta = 0.05f; // 0..1; lower = more smoothing
+  if (!pr_init) { p_f = pitch_deg; r_f = roll_deg; pr_init = true; }
+  p_f = beta * pitch_deg + (1.0f - beta) * p_f;
+  r_f = beta * roll_deg  + (1.0f - beta) * r_f;
+
+  // Use smoothed values
+  pitch_deg = p_f;
+  roll_deg  = r_f;
 
   // --- Dead-zone with hysteresis and dwell ---
   bool inside  = (fabs(pitch_deg) < LEVEL_DEAD_IN_DEG) && (fabs(roll_deg) < LEVEL_DEAD_IN_DEG);
@@ -442,6 +561,7 @@ void updateLeveling() {
     levelMsgSent = false;
   }
 
+
   if (deadIn) {
     // dwell before messaging; stop motion
     if (!levelMsgSent && (now - deadEnterMs) > DEAD_DWELL_MS) {
@@ -452,34 +572,66 @@ void updateLeveling() {
     return;
   }
 
-
   // errors (rad), signs chosen to drive toward zero
   const float pitch_e = -pitch_deg * (PI/180.0f);
   const float roll_e  = -roll_deg  * (PI/180.0f);
 
-  // Integral with leak & clamp
+  // Integral with leak & clamp (harmless when Ki=0)
   auto clampf = [](float v, float lim){ return v>lim? lim : (v<-lim? -lim : v); };
   int_pitch = clampf(int_pitch * (1.0f - I_DECAY_PER_S*dt) + pitch_e*dt, I_MAX_RADs);
   int_roll  = clampf(int_roll  * (1.0f - I_DECAY_PER_S*dt) + roll_e *dt, I_MAX_RADs);
 
   // small-angle linear kinematics: dh = y*pitch + x*roll (plus integral term scaled)
-  const float ki_scale = K_I_MM_PER_RADs / K_V_MM_PER_RAD;
-  const float dh1 = (M1_Y  * pitch_e)                 + (M1_Y  * int_pitch + 0.0f * int_roll) * ki_scale;
+  const float ki_scale = (K_I_MM_PER_RADs == 0.0f) ? 0.0f : (K_I_MM_PER_RADs / K_V_MM_PER_RAD);
+  const float dh1 = (M1_Y  * pitch_e)                  + (M1_Y  * int_pitch + 0.0f * int_roll) * ki_scale;
   const float dh2 = (M23_Y * pitch_e +  M2_X * roll_e) + (M23_Y * int_pitch +  M2_X * int_roll) * ki_scale;
   const float dh3 = (M23_Y * pitch_e + (-M2_X)*roll_e) + (M23_Y * int_pitch + (-M2_X)*int_roll) * ki_scale;
 
+  // convert to step velocities (raw)
+  float v1_raw = dh1 * K_V_MM_PER_RAD * STEPS_PER_MM;
+  float v2_raw = dh2 * K_V_MM_PER_RAD * STEPS_PER_MM;
+  float v3_raw = dh3 * K_V_MM_PER_RAD * STEPS_PER_MM;
 
-  // convert to step velocities
-  auto clamp = [](float v, float lim){ return v>lim? lim : (v<-lim? -lim : v); };
-  float v1 = clamp(dh1 * K_V_MM_PER_RAD * STEPS_PER_MM, motors[0].stepper.maxSpeed());
-  float v2 = clamp(dh2 * K_V_MM_PER_RAD * STEPS_PER_MM, motors[1].stepper.maxSpeed());
-  float v3 = clamp(dh3 * K_V_MM_PER_RAD * STEPS_PER_MM, motors[2].stepper.maxSpeed());
+  // small blend (optional), then rate-limit and deadband
+  const float alpha = 0.10f; // 0..1; higher = more responsive
+  float v1_des = alpha*v1_raw + (1.0f-alpha)*motors[0].v_cmd;
+  float v2_des = alpha*v2_raw + (1.0f-alpha)*motors[1].v_cmd;
+  float v3_des = alpha*v3_raw + (1.0f-alpha)*motors[2].v_cmd;
+
+  auto rate_limit = [&](float v_des, float v_prev) {
+    float dv = v_des - v_prev;
+    float dv_max_tick = DV_MAX * dt;
+    if (dv >  dv_max_tick) dv =  dv_max_tick;
+    if (dv < -dv_max_tick) dv = -dv_max_tick;
+    float v_out = v_prev + dv;
+    // deadband around zero to avoid buzz
+    if (fabs(v_out) < V_MIN) v_out = 0.0f;
+    // clamp to max speed
+    float vmax = MAX_SPEED_STEPS;
+    if (v_out >  vmax) v_out =  vmax;
+    if (v_out < -vmax) v_out = -vmax;
+    return v_out;
+  };
+
+  float v1 = rate_limit(v1_des, motors[0].v_cmd);
+  float v2 = rate_limit(v2_des, motors[1].v_cmd);
+  float v3 = rate_limit(v3_des, motors[2].v_cmd);
+
+  static uint32_t lastDbg = 0;
+if (millis() - lastDbg > 250) {
+  lastDbg = millis();
+  Serial.print(F("DBG p/r(deg): "));
+  Serial.print(pitch_deg, 2); Serial.print(F(" / ")); Serial.print(roll_deg, 2);
+  Serial.print(F(" | v_raw: "));
+  Serial.print(v1_raw, 0); Serial.print(' '); Serial.print(v2_raw, 0); Serial.print(' '); Serial.print(v3_raw, 0);
+  Serial.print(F(" | v_cmd: "));
+  Serial.print(v1, 0); Serial.print(' '); Serial.print(v2, 0); Serial.print(' '); Serial.print(v3, 0);
+  Serial.println();
+}
 
   motors[0].setLevelingVelocity(v1);
   motors[1].setLevelingVelocity(v2);
   motors[2].setLevelingVelocity(v3);
-
-  // Each motor will convert v->position increment in its update()
 }
 
 // ==============================
@@ -501,6 +653,11 @@ void StepperController::handleSerial() {
         EEPROM.put(0, pitch_offset);
         EEPROM.put(sizeof(float), roll_offset);
         Serial.println("ACCEL_CALIBRATED");
+        continue;
+      }
+      
+      if (cmd == "CALIBRATE_GYRO") {
+        tilt.calibrateGyro();
         continue;
       }
 
@@ -532,8 +689,7 @@ void StepperController::handleSerial() {
         continue;
       }
 
-
-            if (cmd.startsWith("SET_LIMITS ")) {
+      if (cmd.startsWith("SET_LIMITS ")) {
         int s1 = cmd.indexOf(' '), s2 = cmd.indexOf(' ', s1+1), s3 = cmd.indexOf(' ', s2+1);
         if (s1>0 && s2>0 && s3>0) {
           int motor_index = cmd.substring(s1+1, s2).toInt();
@@ -546,7 +702,6 @@ void StepperController::handleSerial() {
         }
         continue;
       }
-
 
       if (cmd.startsWith("MOVE_M ")) {
         int s1=cmd.indexOf(' '), s2=cmd.indexOf(' ', s1+1), s3=cmd.indexOf(' ', s2+1);
@@ -579,7 +734,8 @@ void StepperController::handleSerial() {
         motors[0].dunk(); continue;
       }
       if (cmd == "GET_POS") {
-        Serial.print("POS "); Serial.print(0); Serial.print(" ");
+        Serial.print("POS ");
+        Serial.print(0); Serial.print(" ");
         Serial.println(motors[0].position());
         continue;
       }
@@ -589,13 +745,11 @@ void StepperController::handleSerial() {
         continue;
       }
       if (cmd == "HOLD ON") {
-        for (int i=0;i<NUM_MOTORS;i++){ motors[i].holdTorque=true; motors[i].enableMotor();
-; }
+        for (int i=0;i<NUM_MOTORS;i++){ motors[i].holdTorque=true; motors[i].enableMotor(); }
         Serial.println("HOLD ON"); continue;
       }
       if (cmd == "HOLD OFF") {
-        for (int i=0;i<NUM_MOTORS;i++){ motors[i].holdTorque=false; if (!motors[i].isRunning()) motors[i].disableMotor();
- }
+        for (int i=0;i<NUM_MOTORS;i++){ motors[i].holdTorque=false; if (!motors[i].isRunning()) motors[i].disableMotor(); }
         Serial.println("HOLD OFF"); continue;
       }
       if (cmd == "SET_ZERO") {
@@ -627,7 +781,8 @@ void setup() {
 
   for (int i=0;i<NUM_MOTORS;i++) {
     motors[i].begin();
-    motors[i].setSoftLimits(0, lround(150.0f * g_steps_per_mm));  // Example: 0–150 mm travel
+    // Example soft limits: -75 mm to +75 mm
+    motors[i].setSoftLimits(lround(-75.0f * g_steps_per_mm), lround(75.0f * g_steps_per_mm));
   }
   tilt.begin();
 
@@ -655,7 +810,9 @@ void loop() {
 
   // Telemetry only when all are idle
   bool anyRunning = false;
-  for (int i=0;i<NUM_MOTORS;i++) if (motors[i].isRunning()) { anyRunning = true; break; }
+  for (int i=0;i<NUM_MOTORS;i++) {
+    if (levelingActive ? (fabs(motors[i].v_cmd) > 1.0f) : motors[i].isRunning()) { anyRunning = true; break; }
+  }
   if (!anyRunning) tilt.pushTelemetry();
 
   // Leveling controller
