@@ -267,8 +267,12 @@ class MainWindow(QMainWindow):
         self.led_moving.on()
         self.led_ready.off()
         for btn in (self.dunk_btn, self.zero_btn, self.calib_btn, self.up_btn, self.down_btn,
-                    self.connect_btn, self.begin_lvl_btn, self.settings_btn, self.apply_settings_btn):
+                    self.connect_btn, self.settings_btn, self.apply_settings_btn):
             btn.setEnabled(False)
+
+        # Keep the Level button clickable so user can stop leveling
+        self.begin_lvl_btn.setEnabled(True)
+
 
     def _unlock_ui(self, message="Ready"):
         self.is_busy = False
