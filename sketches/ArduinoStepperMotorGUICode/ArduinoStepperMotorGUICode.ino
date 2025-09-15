@@ -166,13 +166,14 @@ public:
     }
     if (wasRunning && !running) {
       if (ledPin > 0) digitalWrite(ledPin, LOW);
+      if (!isLeveling) {
       Serial.println("MOVED");
       Serial.print("POS ");
       Serial.println(stepper.currentPosition());
-      if (!holdTorque) {
-        disableMotor();
       }
-    }
+      if (!holdTorque) disableMotor();
+      }
+    
     wasRunning = running;
     stepper.run();
   }
@@ -326,9 +327,9 @@ void updateLeveling() {
   float roll_error_rad = -currentRoll * (PI / 180.0);
 
   // Kinematic Equations: Calculate required height change (dh) in mm for each motor
-  float dh1 = M1_Y * pitch_error_rad;
+  float dh1 = -M1_Y * pitch_error_rad;
   float dh2 = (M2_X * roll_error_rad) + (M23_Y * pitch_error_rad);
-  float dh3 = (-M2_X * roll_error_rad) + (M23_Y * pitch_error_rad);
+  float dh3 = (M2_X * roll_error_rad) + (M23_Y * pitch_error_rad);
 
   // Convert mm to steps and apply Proportional Gain
   long steps1 = lround(dh1 * STEPS_PER_MM * KP);
@@ -465,7 +466,7 @@ void StepperController::processCommand(String cmd) {
 // Arduino entry points
 // =============================
 void setup() {
-  Serial.begin(9600);
+  Serial.begin(115200);
 
   // Load accelerometer offsets from EEPROM
   EEPROM.get(0, pitch_offset);

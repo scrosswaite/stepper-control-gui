@@ -209,22 +209,22 @@ class MainWindow(QMainWindow):
         self._toggle_line(self._line_rho, self.cb_rho.isChecked())
 
         # ---- Start Modbus worker (set your working COM & mode) ----
-        self._visco_worker = ModbusWorker(
-            ModbusConfig(
-                port="COM9", method="rtu", unit_id=1,
-                baudrate=9600, parity="E", bytesize=8, stopbits=1,
-                poll_ms=1000, byteorder="big", wordorder="big",
-                density_float_addr=0x100B
+        #self._visco_worker = ModbusWorker(
+            #ModbusConfig(
+                #port="COM9", method="rtu", unit_id=1,
+                #baudrate=9600, parity="E", bytesize=8, stopbits=1,
+                #poll_ms=1000, byteorder="big", wordorder="big",
+                #density_float_addr=0x100B
                 # If known, uncomment ONE of these lines:
                 # density_float_addr=0x1020,
                 # density_u16_addr=0x0020, density_scale_lo=900.0, density_scale_hi=1200.0,
-            )
-        )
-        self._visco_worker.data.connect(self._on_visco_data)
-        self._visco_worker.error.connect(lambda e: self._set_status(f"Viscometer: {e}"))
-        self._visco_worker.connection_changed.connect(lambda ok: self._set_status(
-            "Viscometer connected" if ok else "Viscometer disconnected"))
-        self._visco_worker.start()
+            #)
+        #)
+        #self._visco_worker.data.connect(self._on_visco_data)
+        #self._visco_worker.error.connect(lambda e: self._set_status(f"Viscometer: {e}"))
+        #self._visco_worker.connection_changed.connect(lambda ok: self._set_status(
+            #"Viscometer connected" if ok else "Viscometer disconnected"))
+        #self._visco_worker.start()
 
 
     # --------------------------------------------------------------------
@@ -332,8 +332,8 @@ class MainWindow(QMainWindow):
                     self.tilt_z_label.setText(f"{avg_y:.2f}")
 
                     # excel stuff
-                    with open("tilt_data.csv", "w") as f:
-                        f.write(f"{avg_p:.2f},{avg_r:.2f},{avg_y:.2f}")
+                    #with open("tilt_data.csv", "w") as f:
+                        #f.write(f"{avg_p:.2f},{avg_r:.2f},{avg_y:.2f}")
 
                     # Update plots
                     t = time.time() - self._plot_start

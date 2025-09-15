@@ -20,7 +20,7 @@ class SerialController(QObject):
     def list_ports(self):
         return [p.device for p in serial.tools.list_ports.comports()]
 
-    def connect(self, port: str, baud=9600, timeout=5):
+    def connect(self, port: str, baud=115200, timeout=5):
         ser = serial.Serial(port, baud, timeout=timeout)
         banner = ser.readline().decode('utf-8', 'ignore').strip()
         if not banner:
