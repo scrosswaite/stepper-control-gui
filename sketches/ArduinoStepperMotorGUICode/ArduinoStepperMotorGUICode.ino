@@ -199,6 +199,13 @@ private:
   MPU6050 mpu;
   unsigned long lastRead = 0;
   const unsigned long periodMs = 1000;
+
+  // EMA Filter State
+  bool filtInit = false;
+  float pf = 0.0f, rf = 0.0f;
+  float tauSec = 0.4f;
+  unsigned long lastTsMs = 0;
+
 public:
   void begin() {
     Wire.begin();
@@ -206,6 +213,13 @@ public:
     if (!mpu.testConnection()) {
       Serial.println("MPU6050 connection failed!");
     }
+    mpu.setDLPFMode(MPU6050_DLPF_BW_10);
+  }
+
+  void setFilterTau(float tau_s) {
+    if (tau_s < 0.01f) tau_s = 0.01f;
+    if (tau_s > 5.0f) tau_s = 5.0f;
+    tauSec = tau_s;
   }
 
   void getRawPitchRoll(float &raw_pitch, float &raw_roll) {
@@ -218,12 +232,28 @@ public:
       raw_roll  = atan2(-fAx, fAz) * 180.0f / PI;
   }
 
+  // Returns filtered angles (EMA with time-constant)
   void getPitchRoll(float &pitch, float &roll) {
-      float raw_pitch, raw_roll;
-      getRawPitchRoll(raw_pitch, raw_roll);
-      pitch = raw_pitch - pitch_offset;
-      roll  = raw_roll - roll_offset;
+    float rp, rr;
+    getRawPitchRoll(rp, rr);
+    rp -= pitch_offset;
+    rr -= roll_offset;
+
+    unsigned long nowMs = millis();
+    float dt = (lastTsMs == 0) ? 0.01f : (nowMs - lastTsMs) / 1000.0f; // s
+    lastTsMs = nowMs;
+
+    // Compute EMA weight from dt and tau
+    float alpha = dt / (tauSec + dt);
+    if (alpha < 0.0f) alpha = 0.0f;
+    if (alpha > 1.0f) alpha = 1.0f;
+
+    if (!filtInit) { pf = rp; rf = rr; filtInit = true; }
+    else { pf += alpha * (rp - pf); rf += alpha * (rr - rf); }
+
+    pitch = pf; roll = rf;
   }
+
 
   void update() {
     unsigned long now = millis();
@@ -392,6 +422,14 @@ void StepperController::processCommand(String cmd) {
       }
       Serial.println("SPEED_CONFIG_OK");
     }
+  }
+
+    else if (cmd.startsWith("FILTER_TAU ")) {
+    // "FILTER_TAU " is 11 characters including the space
+    float tau = cmd.substring(11).toFloat();
+    tilt.setFilterTau(tau);
+    Serial.print("FILTER_TAU_OK ");
+    Serial.println(tau, 3);
   }
 
   // Command for specific motor control

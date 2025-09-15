@@ -99,6 +99,8 @@ def setup_ui(window):
         pix = pix.scaledToHeight(40, Qt.SmoothTransformation)
         window.logo_label.setPixmap(pix)
 
+
+
     # — Widgets —
     window.port_combo = QComboBox()
     window.refresh_btn = QPushButton("Refresh")
@@ -297,6 +299,7 @@ def setup_ui(window):
     lev_form.addRow("Tilt Z (°):", window.tilt_z_label)  # unavailable until 9DoF
     lev_form.addRow(window.begin_lvl_btn)
 
+
     # Matplotlib canvas for Levelling
     window.tilt_fig    = Figure(figsize=(4, 2))
     window.tilt_canvas = FigureCanvas(window.tilt_fig)
@@ -323,6 +326,26 @@ def setup_ui(window):
     top_layout.addWidget(lev_group, 1)
     lev_layout.addLayout(top_layout)
     lev_layout.addWidget(window.tilt_canvas)
+
+    # --- Filtering controls (tilt smoothing) ---
+    filter_group = QGroupBox("Tilt Filtering")
+    filter_form  = QFormLayout(filter_group)
+
+    # Spinbox shows τ (seconds); slider is a quick adjuster (0.05–2.00 s)
+    window.filter_tau_spin = QDoubleSpinBox()
+    window.filter_tau_spin.setRange(0.05, 2.00)
+    window.filter_tau_spin.setDecimals(2)
+    window.filter_tau_spin.setSingleStep(0.05)
+    window.filter_tau_spin.setToolTip("Exponential smoothing time constant (larger = smoother, more lag)")
+
+    window.filter_tau_slider = QSlider(Qt.Horizontal)
+    window.filter_tau_slider.setRange(5, 200)  # represent 0.05–2.00 s as 5–200 (x100)
+    window.filter_tau_slider.setToolTip("Adjust smoothing aggressiveness")
+
+    filter_form.addRow("Time constant τ (s):", window.filter_tau_spin)
+    filter_form.addRow("Adjust:", window.filter_tau_slider)
+    
+    lev_layout.addWidget(filter_group)
 
     # Export Button
     window.export_btn = QPushButton("Export Tilt Data")

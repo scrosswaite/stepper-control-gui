@@ -58,6 +58,12 @@ class MainWindow(QMainWindow):
         self._tilt_zs = deque(maxlen=100)
         self._all_times, self._all_tilt_xs, self._all_tilt_ys, self._all_tilt_zs = [], [], [], []
 
+        # filtering stuff
+        self._filter_tau = 0.40  # seconds, default
+        self._filter_tau_timer = QtCore.QTimer(self)
+        self._filter_tau_timer.setSingleShot(True)
+        self._filter_tau_timer.timeout.connect(lambda: self._send_filter_tau(self._filter_tau))
+
         # -------------------------------
         # Load persisted settings (NO UI calls here)
         # -------------------------------
@@ -67,6 +73,24 @@ class MainWindow(QMainWindow):
         # Build UI (can safely read _lead_mm/_steps_per_rev/_click_mm)
         # -------------------------------
         setup_ui(self)
+
+        # Initialize from saved value
+        self.filter_tau_spin.setValue(self._filter_tau)
+        self.filter_tau_slider.setValue(int(round(self._filter_tau * 100)))
+
+        # Keep slider and spin in sync (both ways)
+        self.filter_tau_slider.valueChanged.connect(
+            lambda v: self.filter_tau_spin.setValue(v / 100.0)
+        )
+
+        def _on_filter_tau_changed(val):
+            self._filter_tau = float(val)
+            self._save_settings()
+            if self.serial.is_connected:
+                self._filter_tau_timer.start(200)  # debounce to avoid spamming while dragging
+
+        self.filter_tau_spin.valueChanged.connect(_on_filter_tau_changed)
+
 
         # 3D view depends on UI widgets created above
         self._setup_3d_view()
@@ -262,6 +286,25 @@ class MainWindow(QMainWindow):
         self._log_message(line, "RX")
         line = line.strip()
 
+        if line.startswith("FILTER_TAU_OK"):
+            parts = line.split()
+            if len(parts) >= 2:
+                try:
+                    tau = float(parts[1])
+                    # keep UI + state in sync with the ack from Arduino
+                    self._filter_tau = tau
+                    if hasattr(self, "filter_tau_spin"):
+                        self.filter_tau_spin.setValue(tau)
+                    if hasattr(self, "filter_tau_slider"):
+                        self.filter_tau_slider.setValue(int(round(tau * 100)))
+                    self._set_status(f"Filter τ set to {tau:.2f} s")
+                except Exception:
+                    # fallback if parsing fails
+                    self._set_status(f"Filter τ set to {parts[1]} s")
+            else:
+                self._set_status("Filter τ updated")
+            return
+
         if line == "LEVELING_OFF":
             self.is_leveling = False
             self.begin_lvl_btn.setText("Begin Leveling")
@@ -441,7 +484,6 @@ class MainWindow(QMainWindow):
     # Settings & persistence
     # --------------------------------------------------------------------
     def _load_settings(self):
-        """Load config values only. DO NOT touch UI here."""
         settings = self.config_manager.load_settings()
         self._lead_mm = float(settings.get("lead_mm", self._lead_mm))
         self._steps_per_rev = int(settings.get("steps_per_rev", self._steps_per_rev))
@@ -449,10 +491,14 @@ class MainWindow(QMainWindow):
         self._click_deg = (self._click_mm / self._lead_mm) * 360.0
         self._comp_factor = settings.get("comp_factor", self._comp_factor)
 
+        # Use a literal fallback so this never needs the attr to exist first
+        self._filter_tau = float(settings.get("filter_tau", 0.40))
+
         presets = settings.get("presets", {})
         for k in ("1", "2", "3"):
             v = presets.get(k, None)
             self._preset_positions[k] = int(v) if isinstance(v, (int, float)) else None
+
 
     def _update_settings_tab_fields(self):
         # Safe: widgets exist after setup_ui
@@ -466,7 +512,8 @@ class MainWindow(QMainWindow):
             "steps_per_rev": self._steps_per_rev,
             "click_mm": self._click_mm,
             "comp_factor": self._comp_factor,
-            "presets": self._preset_positions
+            "presets": self._preset_positions,
+            "filter_tau": self._filter_tau
         }
         self.config_manager.save_settings(settings_to_save)
 
@@ -542,6 +589,7 @@ class MainWindow(QMainWindow):
                 # Optional: sync position immediately
                 self._log_message("GET_POS", "TX")
                 self.serial.send(b"GET_POS\n")
+                self._send_filter_tau(self._filter_tau)
 
                 # self.position_bar.setRange(0, self.MAX_STEPS)
             except Exception as e:
@@ -853,3 +901,12 @@ class MainWindow(QMainWindow):
 
         self._log_message(command.strip(), "TX")
         self.serial.send(command.encode())
+
+    def _send_filter_tau(self, tau=None):
+        if tau is None:
+            tau = self._filter_tau
+        if not self.serial.is_connected:
+            return
+        cmd = f"FILTER_TAU {tau:.2f}\n"
+        self._log_message(cmd.strip(), "TX")
+        self.serial.send(cmd.encode())
