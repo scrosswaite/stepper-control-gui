@@ -320,7 +320,7 @@ void updateLeveling() {
   float roll_error_rad  = -currentRoll  * (PI / 180.0f);
 
   const float a = roll_error_rad;
-  const float b = -pitch_error_rad;
+  const float b = pitch_error_rad;
 
   static float step_accum[3] = {0,0,0};
 
