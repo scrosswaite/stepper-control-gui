@@ -1,6 +1,3 @@
-#
-# This is the final, stable version of run.py
-#
 import sys
 import time
 

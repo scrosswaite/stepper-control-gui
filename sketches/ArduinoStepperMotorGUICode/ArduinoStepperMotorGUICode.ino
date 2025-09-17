@@ -15,8 +15,8 @@ const int  STEPS_PER_REV = 200 * MICROSTEPS;
 const float LEAD_MM      = 2.0f;           // 2 mm lead screw
 const int  STEPS_PER_MM  = (int)(STEPS_PER_REV / LEAD_MM);
 
-const int  JOG_STEPS     = STEPS_PER_MM / 2;    
-const long DUNK_STEPS    = (long)(50.0f * STEPS_PER_MM);  
+const int  JOG_STEPS     = STEPS_PER_MM / 2;
+const long DUNK_STEPS    = (long)(50.0f * STEPS_PER_MM);
 
 // --- Pin Assignments for TB6600 Drivers ---
 const int STEP_PIN_1 = 9;
@@ -41,10 +41,15 @@ const int LED_MOVING_PIN = A3;
 
 // ===================================
 // Auto-Levelling Configuration
+// (now variables so we can tune at runtime)
 // ===================================
-float KP = 0.8f;                         
-const float LEVEL_DEAD_ZONE = 0.1f;      
-const unsigned long LEVELING_INTERVAL_MS = 50;
+float KP = 0.8f;
+float LEVEL_DEAD_ZONE = 0.1f;                 // deg
+unsigned long LEVELING_INTERVAL_MS = 50;      // scheduler cadence
+
+// New dwell/measurement windows (ms)
+unsigned long SETTLE_MS  = 400;               // wait after motion stops
+unsigned long MEASURE_MS = 200;               // average filtered tilt for this window
 
 bool isLeveling = false;
 bool levelingCompletedMessageSent = false;
@@ -54,7 +59,8 @@ unsigned long lastLevelingTime = 0;
 const float X_by_motor[3] = { +110.0f, -270.0f,   0.0f };
 const float Y_by_motor[3] = { +150.0f, +150.0f, -230.0f };
 
-const long MAX_STEP_CORR = 240;          
+// Made tunable
+long MAX_STEP_CORR = 240;
 
 // =============================
 // StepperController class
@@ -90,7 +96,7 @@ public:
     if (limit1Pin > 0) pinMode(limit1Pin, INPUT_PULLUP);
     if (limit2Pin > 0) pinMode(limit2Pin, INPUT_PULLUP);
 
-    if (enaPin > 0) digitalWrite(enaPin, HIGH); 
+    if (enaPin > 0) digitalWrite(enaPin, HIGH);
     stepper.setMaxSpeed(4000);
     stepper.setAcceleration(500);
     if (enaPin > 0) {
@@ -158,7 +164,10 @@ public:
         Serial.print("POS ");
         Serial.println(stepper.currentPosition());
       }
-      if (!holdTorque) disableMotor();
+      // Keep drivers energised during leveling (don't auto-disable)
+      if (!holdTorque && !isLeveling) {
+        disableMotor();
+      }
     }
 
     wasRunning = running;
@@ -200,7 +209,7 @@ private:
 public:
   void begin() {
     Wire.begin();
-    Wire.setClock(400000);  
+    Wire.setClock(400000);
     #if defined(WIRE_HAS_TIMEOUT) || defined(ARDUINO_ARCH_AVR)
       Wire.setWireTimeout(5000, true);
     #elif defined(ARDUINO_ARCH_ESP32)
@@ -276,11 +285,28 @@ void updateTilt() {
 }
 
 // ===================================
+// Auto-Levelling State Machine
+// ===================================
+enum LvlState { LVL_IDLE, LVL_MOVING, LVL_SETTLE, LVL_MEASURE };
+LvlState lvlState = LVL_IDLE;
+
+unsigned long lvlStateStartMs = 0;
+float measPitchSum = 0.0f, measRollSum = 0.0f;
+int   measCount    = 0;
+
+// ===================================
 // Auto-Levelling Functions
 // ===================================
 void startLeveling() {
   isLeveling = true;
   levelingCompletedMessageSent = false;
+
+  // Initialise state machine
+  lvlState = anyMotorRunning() ? LVL_MOVING : LVL_SETTLE;
+  lvlStateStartMs = millis();
+  measPitchSum = measRollSum = 0.0f;
+  measCount = 0;
+
   Serial.println("LEVELING_ON");
 }
 
@@ -289,6 +315,7 @@ void stopLeveling() {
   for (int i = 0; i < NUM_MOTORS; i++) {
     motors[i].stop();
   }
+  lvlState = LVL_IDLE;
   Serial.println("LEVELING_OFF");
 }
 
@@ -299,42 +326,87 @@ void updateLeveling() {
   if (now - lastLevelingTime < LEVELING_INTERVAL_MS) return;
   lastLevelingTime = now;
 
-  for (int i = 0; i < NUM_MOTORS; i++) {
-    if (motors[i].isRunning()) return;
+  // Track motion
+  if (anyMotorRunning()) {
+    lvlState = LVL_MOVING;
+    return; // let motors finish
   }
 
-  float currentPitch = latestPitch;
-  float currentRoll  = latestRoll;
+  // No motors currently running
+  switch (lvlState) {
+    case LVL_IDLE:
+    case LVL_MOVING:
+      // Just stopped -> start settle period
+      lvlState = LVL_SETTLE;
+      lvlStateStartMs = now;
+      return;
 
-  if (abs(currentPitch) < LEVEL_DEAD_ZONE && abs(currentRoll) < LEVEL_DEAD_ZONE) {
-    if (!levelingCompletedMessageSent) {
-      Serial.println("Levelling has been completed");
-      levelingCompletedMessageSent = true;
-    }
-    return;
-  } else {
-    levelingCompletedMessageSent = false;
-  }
+    case LVL_SETTLE:
+      // Wait for vibrations to die out
+      if (now - lvlStateStartMs < SETTLE_MS) return;
+      // Begin measurement window
+      measPitchSum = measRollSum = 0.0f;
+      measCount = 0;
+      lvlState = LVL_MEASURE;
+      lvlStateStartMs = now;
+      return;
 
-  float pitch_error_rad = -currentPitch * (PI / 180.0f);
-  float roll_error_rad  = -currentRoll  * (PI / 180.0f);
+    case LVL_MEASURE: {
+      // Accumulate filtered tilt samples during the measurement window
+      measPitchSum += latestPitch;
+      measRollSum  += latestRoll;
+      measCount++;
 
-  const float a = roll_error_rad;
-  const float b = pitch_error_rad;
+      if (now - lvlStateStartMs < MEASURE_MS) return;
 
-  static float step_accum[3] = {0,0,0};
+      if (measCount <= 0) return;
+      float currentPitch = measPitchSum / (float)measCount;
+      float currentRoll  = measRollSum  / (float)measCount;
 
-  for (int i = 0; i < NUM_MOTORS; ++i) {
-    float dh_mm   = a * X_by_motor[i] + b * Y_by_motor[i];   
-    float target  = dh_mm * STEPS_PER_MM * KP;               
-    step_accum[i] += target;
+      // Done if inside deadband
+      if (fabsf(currentPitch) < LEVEL_DEAD_ZONE && fabsf(currentRoll) < LEVEL_DEAD_ZONE) {
+        if (!levelingCompletedMessageSent) {
+          Serial.println("Levelling has been completed");
+          levelingCompletedMessageSent = true;
+        }
+        // Keep watching stability while leveled
+        return;
+      } else {
+        levelingCompletedMessageSent = false;
+      }
 
-    long steps = lround(step_accum[i]);                      
-    step_accum[i] -= steps;                                  
+      // Compute correction using averaged error
+      const float pitch_error_rad = -currentPitch * (PI / 180.0f);
+      const float roll_error_rad  = -currentRoll  * (PI / 180.0f);
+      const float a = roll_error_rad;
+      const float b = pitch_error_rad;
 
-    steps = constrain(steps, -MAX_STEP_CORR, MAX_STEP_CORR); 
-    if (steps != 0) {
-      motors[i].moveRelative(steps);
+      static float step_accum[3] = {0,0,0};
+      bool issuedAnyMove = false;
+
+      for (int i = 0; i < NUM_MOTORS; ++i) {
+        float dh_mm  = a * X_by_motor[i] + b * Y_by_motor[i];
+        float target = dh_mm * STEPS_PER_MM * KP;
+        step_accum[i] += target;
+
+        long steps = lround(step_accum[i]);
+        step_accum[i] -= steps;
+
+        steps = constrain(steps, -MAX_STEP_CORR, MAX_STEP_CORR);
+        if (steps != 0) {
+          motors[i].moveRelative(steps);
+          issuedAnyMove = true;
+        }
+      }
+
+      if (issuedAnyMove) {
+        lvlState = LVL_MOVING;
+      } else {
+        // Nothing to do (e.g., rounding) — re-enter settle to avoid spamming
+        lvlState = LVL_SETTLE;
+        lvlStateStartMs = now;
+      }
+      return;
     }
   }
 }
@@ -342,7 +414,6 @@ void updateLeveling() {
 // ===================================
 // Serial Command Processing
 // ===================================
-// (unchanged)
 void StepperController::processCommand(String cmd) {
   cmd.trim();
   if (cmd.length() == 0) return;
@@ -361,6 +432,58 @@ void StepperController::processCommand(String cmd) {
 
   if (cmd == "LEVEL_ON")  { startLeveling(); return; }
   if (cmd == "LEVEL_OFF") { stopLeveling();  return; }
+
+  // Runtime configuration for leveling (KP, deadband, settle/ms, measure/ms, max step)
+  else if (cmd.startsWith("LEVEL_CFG ")) {
+    // Format: LEVEL_CFG <kp> <dead_zone_deg> <settle_ms> <measure_ms> <max_step_corr>
+    float newKP = KP;
+    float newDZ = LEVEL_DEAD_ZONE;
+    unsigned long newSettle  = SETTLE_MS;
+    unsigned long newMeasure = MEASURE_MS;
+    long newMaxStep = MAX_STEP_CORR;
+
+    int p1 = cmd.indexOf(' ');
+    if (p1 > 0) {
+      String rest = cmd.substring(p1 + 1);
+      float vals[5] = {newKP, newDZ, (float)newSettle, (float)newMeasure, (float)newMaxStep};
+      int v = 0, idx = 0;
+      while (v < 5) {
+        int sp = rest.indexOf(' ', idx);
+        String tok = (sp == -1) ? rest.substring(idx) : rest.substring(idx, sp);
+        tok.trim();
+        if (tok.length() > 0) {
+          vals[v] = tok.toFloat();
+          v++;
+        }
+        if (sp == -1) break;
+        idx = sp + 1;
+      }
+      if (v >= 1) newKP      = vals[0];
+      if (v >= 2) newDZ      = vals[1];
+      if (v >= 3) newSettle  = (unsigned long)vals[2];
+      if (v >= 4) newMeasure = (unsigned long)vals[3];
+      if (v >= 5) newMaxStep = (long)vals[4];
+    }
+
+    if (newKP < 0.05f) newKP = 0.05f;
+    if (newKP > 5.0f)  newKP = 5.0f;
+    if (newDZ < 0.01f) newDZ = 0.01f;
+    if (newDZ > 5.0f)  newDZ = 5.0f;
+
+    KP              = newKP;
+    LEVEL_DEAD_ZONE = newDZ;
+    SETTLE_MS       = newSettle;
+    MEASURE_MS      = newMeasure;
+    MAX_STEP_CORR   = newMaxStep;
+
+    Serial.print("LEVEL_CFG_OK ");
+    Serial.print(KP, 3); Serial.print(" ");
+    Serial.print(LEVEL_DEAD_ZONE, 3); Serial.print(" ");
+    Serial.print(SETTLE_MS); Serial.print(" ");
+    Serial.print(MEASURE_MS); Serial.print(" ");
+    Serial.println(MAX_STEP_CORR);
+    return;
+  }
 
   if (isLeveling) {
     stopLeveling();
