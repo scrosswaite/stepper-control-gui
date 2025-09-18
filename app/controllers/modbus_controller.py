@@ -40,21 +40,21 @@ def decode_float_pairs(regs: List[int], *, byteorder="big", wordorder="big"):
 # ----------------------- config -----------------------
 @dataclass
 class ModbusConfig:
-    port: str = "COM9"   # <-- set to your RS-485 COM port
-    method: str = "rtu"  # or "ascii"
+    port: str = "COM9"   # set to your  COM port
+    method: str = "rtu" 
     unit_id: int = 1
     baudrate: int = 9600
     parity: str = "E"
     bytesize: int = 8
     stopbits: int = 1
     timeout: float = 1.2
-    poll_ms: int = 1000  # ~1 Hz polling (device guidance)
+    poll_ms: int = 1000  
     byteorder: str = "big"
-    wordorder: str = "big"  # flip to "little" if floats look wrong
-    density_float_addr: Optional[int] = None   # e.g. 0x1020 if your unit exposes it
-    density_u16_addr:   Optional[int] = None   # e.g. 0x0020 for scaled 16-bit
-    density_scale_lo:   float = 0.0            # used only for u16 scaling
-    density_scale_hi:   float = 2000.0         # (kg/m³) adjust to your range
+    wordorder: str = "big"  
+    density_float_addr: Optional[int] = None   
+    density_u16_addr:   Optional[int] = None   
+    density_scale_lo:   float = 0.0            
+    density_scale_hi:   float = 2000.0         
 
 
 # ----------------------- worker -----------------------

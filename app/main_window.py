@@ -24,12 +24,9 @@ class MainWindow(QMainWindow):
         super().__init__()
         self.setWindowTitle("Stepper Control GUI")
 
-        # -------------------------------
-        # Core state & safe defaults (so setup_ui can read them)
-        # -------------------------------
-        self.config_manager = ConfigManager()
-        self.is_busy = False
-        self.is_leveling = False
+        self.config_manager = ConfigManager() # Manager for saving/loading config settings
+        self.is_busy = False # Flag true if system is executing a motion or task
+        self.is_leveling = False # Flag true if system is running levelling
 
         # Motion / config defaults (overridden by _load_settings)
         self._lead_mm = 4.0
@@ -64,17 +61,13 @@ class MainWindow(QMainWindow):
         self._filter_tau_timer.setSingleShot(True)
         self._filter_tau_timer.timeout.connect(lambda: self._send_filter_tau(self._filter_tau))
 
-        # -------------------------------
-        # Load persisted settings (NO UI calls here)
-        # -------------------------------
+        # Load persisted settings 
         self._load_settings()
 
-        # -------------------------------
-        # Build UI (can safely read _lead_mm/_steps_per_rev/_click_mm)
-        # -------------------------------
+        # Build UI 
         setup_ui(self)
 
-        # Initialize from saved value
+        # Initialise from saved value
         self.filter_tau_spin.setValue(self._filter_tau)
         self.filter_tau_slider.setValue(int(round(self._filter_tau * 100)))
 
@@ -178,13 +171,12 @@ class MainWindow(QMainWindow):
         self._visco_tC = []
         self._visco_rho   = []
         self._visco_start = time.time()
-        self._visco_max_points = 1200  # keep last ~20 min at 1 Hz
+        self._visco_max_points = 1200  
 
-        # ---- STYLING FOR VISCOMETER PLOT ----
-        # 1. Colors & Fonts (easy to customize here)
+        # Styling for viscometer plot
         self.BG_COLOR = "#1e1e1e" # Dark gray background
         self.TEXT_COLOR = "#d0d0d0" # Light gray text
-        self.GRID_COLOR = "#404040" # Muted grid lines
+        self.GRID_COLOR = "#404040" # grid lines
         self.LINE_COLORS = {
             'temp': '#3498db', # Blue for temperature
             'visc': '#2ecc71', # Green for viscosity
@@ -231,6 +223,8 @@ class MainWindow(QMainWindow):
         self._toggle_line(self._line_v,   self.cb_v.isChecked())
         self._toggle_line(self._line_t,   self.cb_t.isChecked())
         self._toggle_line(self._line_rho, self.cb_rho.isChecked())
+
+        # Viscometer connection stuff (not currently in use)
 
         # ---- Start Modbus worker (set your working COM & mode) ----
         #self._visco_worker = ModbusWorker(
@@ -325,7 +319,7 @@ class MainWindow(QMainWindow):
             parts = line.split()
             if len(parts) >= 2:
                 try:
-                    steps = int(float(parts[1]))  # tolerate "123.0"
+                    steps = int(float(parts[1]))  
                     self._current_position = steps
 
                     # If we were saving a preset, store it now
@@ -485,7 +479,7 @@ class MainWindow(QMainWindow):
         self._unlock_ui("E-STOP Sent.")
 
     # --------------------------------------------------------------------
-    # Settings & persistence
+    # Settings 
     # --------------------------------------------------------------------
     def _load_settings(self):
         settings = self.config_manager.load_settings()
@@ -494,8 +488,6 @@ class MainWindow(QMainWindow):
         self._click_mm = float(settings.get("click_mm", self._click_mm))
         self._click_deg = (self._click_mm / self._lead_mm) * 360.0
         self._comp_factor = settings.get("comp_factor", self._comp_factor)
-
-        # Use a literal fallback so this never needs the attr to exist first
         self._filter_tau = float(settings.get("filter_tau", 0.40))
 
         presets = settings.get("presets", {})
@@ -505,7 +497,6 @@ class MainWindow(QMainWindow):
 
 
     def _update_settings_tab_fields(self):
-        # Safe: widgets exist after setup_ui
         self.lead_spin.setValue(self._lead_mm)
         self.steps_spin.setValue(self._steps_per_rev)
         self.click_spin.setValue(self._click_mm)
@@ -673,7 +664,7 @@ class MainWindow(QMainWindow):
             [0, 1, 2], [0, 2, 3], [4, 5, 6], [4, 6, 7], [0, 1, 5], [0, 5, 4],
             [2, 3, 7], [2, 7, 6], [0, 3, 7], [0, 7, 4], [1, 2, 6], [1, 6, 5]
         ])
-        colors = np.array([[0.3, 0.8, 0.3, 0.8]] * 12)  # Semi-transparent green
+        colors = np.array([[0.3, 0.8, 0.3, 0.8]] * 12)  
 
         self.accel_body = gl.GLMeshItem(
             vertexes=verts, faces=faces, faceColors=colors,
@@ -735,7 +726,6 @@ class MainWindow(QMainWindow):
         steps_to_move = target_pos - self._current_position
         degs_to_move = (steps_to_move / self._steps_per_rev) * 360.0
 
-        # Optional: avoid tiny no-op moves
         if abs(degs_to_move) < 0.01:
             self._set_status(f"Already at Preset {preset_num}.")
             return

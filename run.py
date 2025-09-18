@@ -16,7 +16,6 @@ def send_serial_command(port, command):
         print(f"Opening port {port}...")
         # Use a 'with' statement to ensure the port always closes.
         with serial.Serial(port, 9600, timeout=2) as ser:
-            time.sleep(1.5) # Wait a bit longer for the connection to fully establish.
             
             # Read the Arduino's welcome message to confirm it's ready.
             response = ser.readline().decode('utf-8', 'ignore').strip()
@@ -41,13 +40,11 @@ def send_serial_command(port, command):
     except Exception as e:
         print(f"An unexpected error occurred: {e}")
 
-
+# Excel things (not currently in use)
 def main():
     # Check if we are running in command-line mode.
     if len(sys.argv) > 1:
-        # --- COMMAND-LINE MODE ---
-        # We need a temporary MainWindow instance ONLY to get calculation values.
-        # This is done without showing any windows.
+
         app = QApplication.instance() or QApplication(sys.argv)
         temp_window = MainWindow()
 
